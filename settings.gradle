@@ -1,0 +1,7 @@
+plugins {
+    // Lets Gradle auto-download a matching JDK if one isn't already installed locally, so the
+    // Java 25 toolchain requirement in build.gradle doesn't depend on a machine-specific install.
+    id 'org.gradle.toolchains.foojay-resolver-convention' version '0.8.0'
+}
+
+rootProject.name = 'xlsx-to-pptx'

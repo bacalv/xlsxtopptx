@@ -1,0 +1,13 @@
+build/
+.gradle/
+!gradle/wrapper/gradle-wrapper.jar
+
+.idea/
+*.iml
+out/
+
+.DS_Store
+
+# Local manual-test scratch output, not part of the project
+test_sheet.xlsx
+test_sheet.pptx

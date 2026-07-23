@@ -1,0 +1,57 @@
+plugins {
+    id 'java'
+    id 'application'
+}
+
+group = 'com.example'
+version = '1.0.0'
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation 'org.apache.poi:poi-ooxml:5.5.1'
+
+    implementation 'org.slf4j:slf4j-api:2.0.16'
+    runtimeOnly 'org.slf4j:slf4j-simple:2.0.16'
+
+    compileOnly 'org.projectlombok:lombok:1.18.46'
+    annotationProcessor 'org.projectlombok:lombok:1.18.46'
+
+    testCompileOnly 'org.projectlombok:lombok:1.18.46'
+    testAnnotationProcessor 'org.projectlombok:lombok:1.18.46'
+
+    testImplementation platform('org.junit:junit-bom:5.11.3')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+    testLogging {
+        events "passed", "skipped", "failed"
+    }
+}
+
+java {
+    // A toolchain (rather than sourceCompatibility/targetCompatibility) lets Gradle itself keep
+    // running on whatever JDK launched it while compiling and running this project's code on
+    // Java 25 specifically -- Gradle auto-detects or auto-provisions a matching JDK (see the
+    // foojay-resolver-convention plugin in settings.gradle) instead of requiring one hardcoded
+    // machine-specific path.
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(25)
+    }
+}
+
+application {
+    mainClass = 'xlsxtopptx.Main'
+}
+
+// Convenience: gradle run --args="input.xlsx output.pptx [sheetIndex]"
+tasks.named('run') {
+    if (project.hasProperty('args')) {
+        args project.getProperty('args').split(' ')
+    }
+}
