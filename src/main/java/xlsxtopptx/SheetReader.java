@@ -5,6 +5,7 @@ import org.apache.poi.ss.usermodel.DataFormatter;
 import org.apache.poi.ss.usermodel.FillPatternType;
 import org.apache.poi.ss.usermodel.FormulaEvaluator;
 import org.apache.poi.ss.usermodel.HorizontalAlignment;
+import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.sl.usermodel.TextParagraph.TextAlign;
 import org.apache.poi.xssf.usermodel.XSSFCellStyle;
@@ -138,27 +139,44 @@ public final class SheetReader {
         var result = new ArrayList<MergeRegion>();
         for (int r = firstRow; r <= lastRow; r++) {
             var row = sheet.getRow(r);
-            if (row == null) continue;
-            var runStart = -1;
-            for (int c = firstCol; c <= lastCol + 1; c++) {
-                var isCenterAcross = false;
-                if (c <= lastCol) {
-                    var cell = row.getCell(c);
-                    if (cell != null) {
-                        isCenterAcross = cell.getCellStyle().getAlignment() == HorizontalAlignment.CENTER_SELECTION;
-                    }
-                }
-                if (isCenterAcross) {
-                    if (runStart == -1) runStart = c;
-                } else {
-                    if (runStart != -1 && c - 1 > runStart) {
-                        result.add(new MergeRegion(r - firstRow, r - firstRow, runStart - firstCol, c - 1 - firstCol));
-                    }
-                    runStart = -1;
-                }
+            if (row != null) {
+                result.addAll(centerAcrossRunsInRow(row, r - firstRow, firstCol, lastCol));
             }
         }
         return result;
+    }
+
+    /** Finds runs of 2+ adjacent center-across-selection cells within a single row, as
+     *  {@link MergeRegion}s relative to {@code firstCol} on {@code localRow}. */
+    private static List<MergeRegion> centerAcrossRunsInRow(Row row, int localRow, int firstCol, int lastCol) {
+        var runs = new ArrayList<MergeRegion>();
+        var runStart = -1;
+        // Scans one column past lastCol as a sentinel, so a run ending exactly at lastCol still
+        // gets flushed into a MergeRegion instead of being silently dropped.
+        for (int c = firstCol; c <= lastCol + 1; c++) {
+            if (isCenterAcrossSelection(row, c, lastCol)) {
+                runStart = runStart == -1 ? c : runStart;
+            } else {
+                runStart = flushRun(runs, runStart, localRow, firstCol, c);
+            }
+        }
+        return runs;
+    }
+
+    private static boolean isCenterAcrossSelection(Row row, int col, int lastCol) {
+        if (col > lastCol) return false;
+        var cell = row.getCell(col);
+        return cell != null && cell.getCellStyle().getAlignment() == HorizontalAlignment.CENTER_SELECTION;
+    }
+
+    /** Records the run starting at {@code runStart} (if any) as a {@link MergeRegion} ending at
+     *  column {@code c - 1}, but only when it spans 2+ cells. Always returns -1, resetting the run
+     *  for the next column. */
+    private static int flushRun(List<MergeRegion> runs, int runStart, int localRow, int firstCol, int c) {
+        if (runStart != -1 && c - 1 > runStart) {
+            runs.add(new MergeRegion(localRow, localRow, runStart - firstCol, c - 1 - firstCol));
+        }
+        return -1;
     }
 
     // ---------- small conversions ----------

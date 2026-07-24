@@ -50,7 +50,8 @@ class MainTest {
 
     @Test
     void aSingleArgumentPrintsUsageAndWritesNothing() {
-        assertDoesNotThrow(() -> Main.main(new String[]{xlsxPath.toString()}));
+        var args = new String[]{xlsxPath.toString()};
+        assertDoesNotThrow(() -> Main.main(args));
 
         assertFalse(Files.exists(pptxPath));
     }
@@ -77,16 +78,18 @@ class MainTest {
 
     @Test
     void nonNumericSheetIndexFailsFast() {
-        assertThrows(NumberFormatException.class, () ->
-            Main.main(new String[]{xlsxPath.toString(), pptxPath.toString(), "not-a-number"}));
+        var args = new String[]{xlsxPath.toString(), pptxPath.toString(), "not-a-number"};
+
+        assertThrows(NumberFormatException.class, () -> Main.main(args));
 
         assertFalse(Files.exists(pptxPath), "no output file should be written when argument parsing fails");
     }
 
     @Test
     void outOfRangeSheetIndexFailsFast() {
-        assertThrows(IllegalArgumentException.class, () ->
-            Main.main(new String[]{xlsxPath.toString(), pptxPath.toString(), "99"}));
+        var args = new String[]{xlsxPath.toString(), pptxPath.toString(), "99"};
+
+        assertThrows(IllegalArgumentException.class, () -> Main.main(args));
 
         assertFalse(Files.exists(pptxPath), "no output file should be written when the sheet index is invalid");
     }
@@ -94,9 +97,9 @@ class MainTest {
     @Test
     void missingInputFileFailsFast() {
         var missing = tempDir.resolve("does-not-exist.xlsx");
+        var args = new String[]{missing.toString(), pptxPath.toString()};
 
-        assertThrows(FileNotFoundException.class, () ->
-            Main.main(new String[]{missing.toString(), pptxPath.toString()}));
+        assertThrows(FileNotFoundException.class, () -> Main.main(args));
 
         assertFalse(Files.exists(pptxPath), "no output file should be written when the input file is missing");
     }
