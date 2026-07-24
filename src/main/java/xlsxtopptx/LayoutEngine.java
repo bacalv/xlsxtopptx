@@ -24,26 +24,45 @@ public final class LayoutEngine {
         var rows = sheet.rows();
         var numCols = sheet.numCols();
 
+        var fontScale = computeFontScale(rows, numCols, mergeIndex, availableWidth, availableHeight);
+        var colWidths = computeColumnWidths(rows, numCols, mergeIndex, fontScale, availableWidth, scaleToFitWidth);
+        var rowHeights = computeRowHeights(rows, mergeIndex, fontScale, availableHeight, scaleToFitHeight);
+
+        return new SheetLayout(fontScale, boxed(colWidths), boxed(rowHeights), sum(colWidths), sum(rowHeights));
+    }
+
+    /** The single font scale (at most 1.0, i.e. never stretched beyond a cell's own size) that
+     *  makes the sheet's natural width and height both fit the available area -- floored so no
+     *  cell's font drops below {@link LayoutConstants#MIN_FONT_PT} even if that means overflowing. */
+    private static double computeFontScale(List<RowSnapshot> rows, int numCols, MergeIndex mergeIndex,
+                                            double availableWidth, double availableHeight) {
         var totalW1x = 0.0;
         for (int c = 0; c < numCols; c++) totalW1x += naturalColWidth(rows, c, 1.0, mergeIndex);
         var totalH1x = 0.0;
         for (int r = 0; r < rows.size(); r++) totalH1x += naturalRowHeight(rows.get(r), r, 1.0, mergeIndex);
 
-        var minFontInSheet = LayoutConstants.DEFAULT_FONT_PT;
-        for (var row : rows) {
-            for (var cell : row.cells()) {
-                if (!cell.isEmpty()) {
-                    minFontInSheet = Math.min(minFontInSheet, cell.fontSize() > 0 ? cell.fontSize() : LayoutConstants.DEFAULT_FONT_PT);
-                }
-            }
-        }
-
         var scaleW = totalW1x > 0 ? availableWidth / totalW1x : 1.0;
         var scaleH = totalH1x > 0 ? availableHeight / totalH1x : 1.0;
         var fontScale = Math.min(1.0, Math.min(scaleW, scaleH));
-        var minScaleFloor = LayoutConstants.MIN_FONT_PT / minFontInSheet;
-        fontScale = Math.max(fontScale, minScaleFloor);
 
+        var minScaleFloor = LayoutConstants.MIN_FONT_PT / minFontSize(rows);
+        return Math.max(fontScale, minScaleFloor);
+    }
+
+    private static double minFontSize(List<RowSnapshot> rows) {
+        var minFont = LayoutConstants.DEFAULT_FONT_PT;
+        for (var row : rows) {
+            for (var cell : row.cells()) {
+                if (!cell.isEmpty()) {
+                    minFont = Math.min(minFont, cell.fontSize() > 0 ? cell.fontSize() : LayoutConstants.DEFAULT_FONT_PT);
+                }
+            }
+        }
+        return minFont;
+    }
+
+    private static double[] computeColumnWidths(List<RowSnapshot> rows, int numCols, MergeIndex mergeIndex,
+                                                 double fontScale, double availableWidth, boolean scaleToFitWidth) {
         var colWidths = new double[numCols];
         var wSum = 0.0;
         for (int c = 0; c < numCols; c++) {
@@ -57,7 +76,13 @@ public final class LayoutEngine {
         // left off, the table just keeps its natural (possibly smaller) size.
         var wGrow = wSum > 0 ? (scaleToFitWidth ? availableWidth / wSum : Math.min(1.0, availableWidth / wSum)) : 1.0;
         for (int c = 0; c < numCols; c++) colWidths[c] *= wGrow;
+        return colWidths;
+    }
 
+    /** Same shrink-if-needed-else-opt-in-grow logic as {@link #computeColumnWidths}, applied to
+     *  row heights instead of column widths. */
+    private static double[] computeRowHeights(List<RowSnapshot> rows, MergeIndex mergeIndex,
+                                               double fontScale, double availableHeight, boolean scaleToFitHeight) {
         var rowHeights = new double[rows.size()];
         var hSum = 0.0;
         for (int r = 0; r < rows.size(); r++) {
@@ -66,13 +91,13 @@ public final class LayoutEngine {
         }
         var hGrow = hSum > 0 ? (scaleToFitHeight ? availableHeight / hSum : Math.min(1.0, availableHeight / hSum)) : 1.0;
         for (int r = 0; r < rows.size(); r++) rowHeights[r] *= hGrow;
+        return rowHeights;
+    }
 
-        var tableWidth = 0.0;
-        for (var w : colWidths) tableWidth += w;
-        var tableHeight = 0.0;
-        for (var h : rowHeights) tableHeight += h;
-
-        return new SheetLayout(fontScale, boxed(colWidths), boxed(rowHeights), tableWidth, tableHeight);
+    private static double sum(double[] values) {
+        var total = 0.0;
+        for (var v : values) total += v;
+        return total;
     }
 
     private static List<Double> boxed(double[] values) {
