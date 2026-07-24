@@ -22,7 +22,8 @@ class PptxMergerTest {
 
     @Test
     void throwsOnEmptyInputList() {
-        assertThrows(IllegalArgumentException.class, () -> PptxMerger.merge(List.of()));
+        List<InputStream> emptyInputs = List.of();
+        assertThrows(IllegalArgumentException.class, () -> PptxMerger.merge(emptyInputs));
     }
 
     @Test

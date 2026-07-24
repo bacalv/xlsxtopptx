@@ -100,21 +100,27 @@ public final class SpreadsheetTemplate {
         var prototypes = new HashMap<String, RowPrototype>();
         for (var row : sheet) {
             for (var cell : row) {
-                if (cell.getCellType() != CellType.STRING) continue;
-                var matcher = TYPE_MARKER.matcher(cell.getStringCellValue());
-                if (!matcher.matches()) continue;
-
-                var type = matcher.group(1);
-                if (prototypes.containsKey(type)) {
-                    throw new IllegalStateException("Duplicate row type marker: %_" + type);
+                var type = typeMarkerOf(cell);
+                if (type != null) {
+                    if (prototypes.containsKey(type)) {
+                        throw new IllegalStateException("Duplicate row type marker: %_" + type);
+                    }
+                    prototypes.put(type, RowPrototype.capture(row, cell.getColumnIndex()));
                 }
-                prototypes.put(type, RowPrototype.capture(row, cell.getColumnIndex()));
             }
         }
         if (prototypes.isEmpty()) {
             throw new IllegalStateException("No \"%_<type>\" row markers found in " + sheet.getSheetName());
         }
         return prototypes;
+    }
+
+    /** The {@code <type>} out of a {@code %_<type>} marker cell, or null if {@code cell} isn't
+     *  one (not a string cell, or its text doesn't match the marker pattern). */
+    private static String typeMarkerOf(Cell cell) {
+        if (cell.getCellType() != CellType.STRING) return null;
+        var matcher = TYPE_MARKER.matcher(cell.getStringCellValue());
+        return matcher.matches() ? matcher.group(1) : null;
     }
 
     private void writeRow(int outputRowIndex, RowPrototype prototype, SpreadsheetRow data) {
@@ -238,12 +244,16 @@ public final class SpreadsheetTemplate {
      *  SpreadsheetToPptx) far past the last row this method actually wrote. Never trims into or
      *  above the output rows themselves. */
     private void trimTrailingEmptyRows(int newLastRowIndex) {
-        for (int r = sheet.getLastRowNum(); r > newLastRowIndex; r--) {
+        for (int r = sheet.getLastRowNum(); r > newLastRowIndex && isEmptyRow(sheet.getRow(r)); r--) {
             var row = sheet.getRow(r);
-            if (row == null) continue;
-            if (row.getPhysicalNumberOfCells() > 0) break;
-            sheet.removeRow(row);
+            if (row != null) {
+                sheet.removeRow(row);
+            }
         }
+    }
+
+    private static boolean isEmptyRow(Row row) {
+        return row == null || row.getPhysicalNumberOfCells() == 0;
     }
 
     private boolean referencesThisSheet(String reference) {
