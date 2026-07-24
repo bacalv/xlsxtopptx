@@ -157,6 +157,14 @@ class SpreadsheetTemplateTest {
             .render(List.of()));
     }
 
+    @Test
+    void duplicateTypeMarkerThrows() throws IOException {
+        var template = buildTemplateWithDuplicateMarker();
+        var ex = assertThrows(IllegalStateException.class, () -> SpreadsheetTemplate.of(new ByteArrayInputStream(template))
+            .render(List.of(SpreadsheetRow.type("PLAIN").data("x", 1, 2).build())));
+        assertTrue(ex.getMessage().contains("PLAIN"));
+    }
+
     private static XSSFWorkbook render(byte[] template, List<SpreadsheetRow> rows) throws IOException {
         var rendered = SpreadsheetTemplate.of(new ByteArrayInputStream(template)).render(rows);
         return new XSSFWorkbook(new ByteArrayInputStream(rendered));
@@ -193,6 +201,18 @@ class SpreadsheetTemplateTest {
             if (sharedFormulaTotalRow) {
                 shareFormulaGroup(totalB, totalC, "B4:C4");
             }
+
+            var out = new ByteArrayOutputStream();
+            workbook.write(out);
+            return out.toByteArray();
+        }
+    }
+
+    private static byte[] buildTemplateWithDuplicateMarker() throws IOException {
+        try (var workbook = new XSSFWorkbook()) {
+            var sheet = workbook.createSheet(SHEET);
+            markerRow(sheet, 0, "%_PLAIN", null, "SUM(B1:C1)");
+            markerRow(sheet, 1, "%_PLAIN", null, "SUM(B2:C2)");
 
             var out = new ByteArrayOutputStream();
             workbook.write(out);

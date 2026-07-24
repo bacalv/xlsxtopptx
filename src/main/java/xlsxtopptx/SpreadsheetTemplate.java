@@ -103,10 +103,7 @@ public final class SpreadsheetTemplate {
             for (var cell : row) {
                 var type = typeMarkerOf(cell);
                 if (type != null) {
-                    if (prototypes.containsKey(type)) {
-                        throw new IllegalStateException("Duplicate row type marker: %_" + type);
-                    }
-                    prototypes.put(type, RowPrototype.capture(row, cell.getColumnIndex()));
+                    captureRowPrototype(prototypes, type, row, cell);
                 }
             }
         }
@@ -114,6 +111,20 @@ public final class SpreadsheetTemplate {
             throw new IllegalStateException("No \"%_<type>\" row markers found in " + sheet.getSheetName());
         }
         return prototypes;
+    }
+
+    private static void captureRowPrototype(Map<String, RowPrototype> prototypes, String type, Row row, Cell cell) {
+        // computeIfAbsent's mapping function only runs the first time "type" is seen -- wasNew
+        // tracks whether that happened just now, so a later cell reusing the same type marker
+        // (same row or a different one) is caught as a duplicate instead of silently ignored.
+        var wasNew = new boolean[1];
+        prototypes.computeIfAbsent(type, t -> {
+            wasNew[0] = true;
+            return RowPrototype.capture(row, cell.getColumnIndex());
+        });
+        if (!wasNew[0]) {
+            throw new IllegalStateException("Duplicate row type marker: %_" + type);
+        }
     }
 
     /** The {@code <type>} out of a {@code %_<type>} marker cell, or null if {@code cell} isn't
