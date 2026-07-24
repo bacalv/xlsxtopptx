@@ -12,8 +12,11 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -30,13 +33,22 @@ import java.util.regex.Pattern;
  * output rows, it must reference the marker block via a named range (e.g. {@code
  * SUM(COL_B_VALUES)}) rather than a hardcoded cell range, since only such named ranges are grown
  * or shrunk to cover the actual output rows. Marker rows must be contiguous in the sheet.
+ *
+ * <p>Separately, the sheet may contain sheet-wide {@code $NAME} tokens anywhere in a string cell
+ * (e.g. a title cell reading {@code "As of $REPORT_DATE"}), each resolved once via {@link
+ * #placeholder} rather than once per output row. Every {@code $NAME} token found in the sheet
+ * must have a matching {@link #placeholder} call and vice versa -- an unknown token is almost
+ * always a typo in the template, and an unused one is almost always a stale or misspelled call
+ * left behind after the template changed.
  */
 public final class SpreadsheetTemplate {
     private static final Pattern TYPE_MARKER = Pattern.compile("%_(?!\\d+$)(.+)");
     private static final Pattern PLACEHOLDER_MARKER = Pattern.compile("%_(\\d+)");
+    private static final Pattern PLACEHOLDER_TOKEN = Pattern.compile("\\$([A-Za-z_][A-Za-z0-9_]*)");
 
     private final XSSFWorkbook workbook;
     private final XSSFSheet sheet;
+    private final Map<String, String> placeholders = new HashMap<>();
 
     private SpreadsheetTemplate(XSSFWorkbook workbook) {
         this.workbook = workbook;
@@ -45,6 +57,14 @@ public final class SpreadsheetTemplate {
 
     public static SpreadsheetTemplate of(InputStream templateInput) throws IOException {
         return new SpreadsheetTemplate(new XSSFWorkbook(templateInput));
+    }
+
+    /** Registers a sheet-wide {@code $name} token (case as given, e.g. {@code "REPORT_DATE"} for
+     *  {@code $REPORT_DATE}) to be replaced by {@code value} everywhere it appears in the
+     *  template's string cells. Must be called before {@link #render}. */
+    public SpreadsheetTemplate placeholder(String name, Object value) {
+        placeholders.put(name, String.valueOf(value));
+        return this;
     }
 
     public byte[] render(List<SpreadsheetRow> rows) throws IOException {
@@ -86,6 +106,7 @@ public final class SpreadsheetTemplate {
 
         growNamedRanges(originalLast, newLast);
         trimTrailingEmptyRows(newLast);
+        substitutePlaceholders();
 
         workbook.setForceFormulaRecalculation(true);
         workbook.getCreationHelper().createFormulaEvaluator().evaluateAll();
@@ -273,6 +294,59 @@ public final class SpreadsheetTemplate {
 
     private static boolean isEmptyRow(Row row) {
         return row == null || row.getPhysicalNumberOfCells() == 0;
+    }
+
+    /** Replaces every {@code $NAME} token in the sheet's string cells with its registered {@link
+     *  #placeholder} value, after checking that the tokens actually present in the sheet exactly
+     *  match the placeholders that were registered. Runs after rows are written so it also covers
+     *  any token that happens to land in freshly written row data, though it's meant for static
+     *  cells (titles, headers) outside the marker block. */
+    private void substitutePlaceholders() {
+        var foundTokens = new HashSet<String>();
+        for (var row : sheet) {
+            for (var cell : row) {
+                if (cell.getCellType() == CellType.STRING) {
+                    collectTokens(cell.getStringCellValue(), foundTokens);
+                }
+            }
+        }
+
+        var unknownTokens = foundTokens.stream().filter(t -> !placeholders.containsKey(t)).toList();
+        if (!unknownTokens.isEmpty()) {
+            throw new IllegalArgumentException(
+                "Unknown placeholder(s) in template: " + unknownTokens + " -- registered placeholder(s): "
+                    + placeholders.keySet());
+        }
+        var unusedPlaceholders = placeholders.keySet().stream().filter(p -> !foundTokens.contains(p)).toList();
+        if (!unusedPlaceholders.isEmpty()) {
+            throw new IllegalArgumentException("Placeholder(s) registered but not found in template: "
+                + unusedPlaceholders);
+        }
+
+        for (var row : sheet) {
+            for (var cell : row) {
+                if (cell.getCellType() == CellType.STRING && PLACEHOLDER_TOKEN.matcher(cell.getStringCellValue()).find()) {
+                    cell.setCellValue(replaceTokens(cell.getStringCellValue()));
+                }
+            }
+        }
+    }
+
+    private static void collectTokens(String text, Set<String> into) {
+        var matcher = PLACEHOLDER_TOKEN.matcher(text);
+        while (matcher.find()) {
+            into.add(matcher.group(1));
+        }
+    }
+
+    private String replaceTokens(String text) {
+        var matcher = PLACEHOLDER_TOKEN.matcher(text);
+        var result = new StringBuilder();
+        while (matcher.find()) {
+            matcher.appendReplacement(result, Matcher.quoteReplacement(placeholders.get(matcher.group(1))));
+        }
+        matcher.appendTail(result);
+        return result.toString();
     }
 
     private boolean referencesThisSheet(String reference) {

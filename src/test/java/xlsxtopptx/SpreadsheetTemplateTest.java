@@ -165,6 +165,35 @@ class SpreadsheetTemplateTest {
         assertTrue(ex.getMessage().contains("PLAIN"));
     }
 
+    @Test
+    void placeholderTokenIsSubstitutedWhereverItAppearsInTheSheet() throws Exception {
+        var template = buildTemplateWithTitleCell("As of $REPORT_DATE");
+        var rendered = new XSSFWorkbook(new ByteArrayInputStream(SpreadsheetTemplate.of(new ByteArrayInputStream(template))
+            .placeholder("REPORT_DATE", "2026-06-11")
+            .render(List.of(SpreadsheetRow.type("BOLD").data("Row A", 1, 2).build()))));
+
+        assertEquals("As of 2026-06-11", rendered.getSheetAt(0).getRow(2).getCell(0).getStringCellValue());
+    }
+
+    @Test
+    void unknownPlaceholderTokenThrows() throws IOException {
+        var template = buildTemplateWithTitleCell("As of $REPORT_DATE");
+        var ex = assertThrows(IllegalArgumentException.class,
+            () -> SpreadsheetTemplate.of(new ByteArrayInputStream(template))
+                .render(List.of(SpreadsheetRow.type("BOLD").data("Row A", 1, 2).build())));
+        assertTrue(ex.getMessage().contains("REPORT_DATE"));
+    }
+
+    @Test
+    void unusedRegisteredPlaceholderThrows() throws IOException {
+        var template = buildTemplate(false);
+        var ex = assertThrows(IllegalArgumentException.class,
+            () -> SpreadsheetTemplate.of(new ByteArrayInputStream(template))
+                .placeholder("REPORT_DATE", "2026-06-11")
+                .render(List.of(SpreadsheetRow.type("BOLD").data("Row A", 1, 2).build())));
+        assertTrue(ex.getMessage().contains("REPORT_DATE"));
+    }
+
     private static XSSFWorkbook render(byte[] template, List<SpreadsheetRow> rows) throws IOException {
         var rendered = SpreadsheetTemplate.of(new ByteArrayInputStream(template)).render(rows);
         return new XSSFWorkbook(new ByteArrayInputStream(rendered));
@@ -201,6 +230,18 @@ class SpreadsheetTemplateTest {
             if (sharedFormulaTotalRow) {
                 shareFormulaGroup(totalB, totalC, "B4:C4");
             }
+
+            var out = new ByteArrayOutputStream();
+            workbook.write(out);
+            return out.toByteArray();
+        }
+    }
+
+    private static byte[] buildTemplateWithTitleCell(String titleText) throws IOException {
+        try (var workbook = new XSSFWorkbook()) {
+            var sheet = workbook.createSheet(SHEET);
+            markerRow(sheet, 0, "%_BOLD", null, "SUM(B1:C1)");
+            sheet.createRow(2).createCell(0).setCellValue(titleText);
 
             var out = new ByteArrayOutputStream();
             workbook.write(out);
