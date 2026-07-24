@@ -9,8 +9,10 @@ import java.io.InputStream;
 /**
  * Parameters for {@link SpreadsheetToPptx#convert}.
  *
- * <p>{@code excelInput} is read but never closed by {@code convert} -- opening (and closing) it
- * is the caller's responsibility.
+ * <p>{@code excelInput} is fully read by {@code convert}; opening it is the caller's
+ * responsibility, but closing it afterward is not -- POI's {@code XSSFWorkbook} reads the stream
+ * to completion and closes it itself as part of construction, so the stream is unusable (and
+ * safe to close again, as a no-op) by the time {@code convert} returns.
  *
  * <p>{@code targetRange}, when set, is an Excel A1-notation range (e.g. {@code "B2:F10"})
  * restricting the conversion to that rectangle of the sheet instead of its full used area.
@@ -22,7 +24,7 @@ import java.io.InputStream;
  *
  * <p>{@code templateInput}, when set, is a .pptx whose first slide is used as the base for the
  * output (e.g. one carrying a logo or other branding) instead of a blank slide on a blank
- * presentation. Like {@code excelInput}, it's read but never closed by {@code convert}. Left
+ * presentation. Like {@code excelInput}, it's fully read and left closed by {@code convert}. Left
  * unset, a blank presentation and slide are created as before.
  *
  * <p>{@code tableArea}, when set, is the exact rectangle (in points, relative to the slide's

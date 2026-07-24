@@ -11,7 +11,10 @@ import java.util.List;
 public final class PptxMerger {
     private PptxMerger() {}
 
-    /** Reads each stream but does not close it -- same contract as {@link ConvertParams}. */
+    /** Fully reads each stream; opening them is the caller's responsibility, but closing them
+     *  afterward is not -- POI's {@code XMLSlideShow} reads a stream to completion and closes it
+     *  itself as part of construction, so each stream is unusable (and safe to close again, as a
+     *  no-op) by the time {@code merge} returns. Same behavior as {@link ConvertParams}. */
     public static byte[] merge(List<InputStream> pptxInputs) throws IOException {
         if (pptxInputs.isEmpty()) {
             throw new IllegalArgumentException("pptxInputs must not be empty");
