@@ -3,6 +3,7 @@ package xlsxtopptx;
 import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.CellType;
 import org.apache.poi.ss.usermodel.Row;
+import org.apache.poi.xssf.usermodel.XSSFName;
 import org.apache.poi.xssf.usermodel.XSSFSheet;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 
@@ -180,13 +181,17 @@ public final class SpreadsheetTemplate {
         var rowEndPattern = Pattern.compile("(\\$[A-Z]+\\$)" + oldRowNumber + "$");
 
         for (var name : workbook.getAllNames()) {
-            var reference = name.getRefersToFormula();
-            if (!referencesThisSheet(reference)) continue;
+            growNamedRange(name, rowEndPattern, newRowNumber);
+        }
+    }
 
-            var matcher = rowEndPattern.matcher(reference);
-            if (matcher.find()) {
-                name.setRefersToFormula(matcher.replaceFirst("$1" + newRowNumber));
-            }
+    private void growNamedRange(XSSFName name, Pattern rowEndPattern, int newRowNumber) {
+        var reference = name.getRefersToFormula();
+        if (!referencesThisSheet(reference)) return;
+
+        var matcher = rowEndPattern.matcher(reference);
+        if (matcher.find()) {
+            name.setRefersToFormula(matcher.replaceFirst("$1" + newRowNumber));
         }
     }
 
@@ -202,26 +207,29 @@ public final class SpreadsheetTemplate {
      *  {@code Sheet.shiftRows} is subsequently used to move the row. */
     private void deshareFormulas(int firstRowIndex, int lastRowIndex) {
         for (int r = firstRowIndex; r <= lastRowIndex; r++) {
-            var row = sheet.getRow(r);
-            if (row == null) continue;
+            deshareFormulasInRow(sheet.getRow(r));
+        }
+    }
 
-            var formulaCells = new ArrayList<Cell>();
-            for (var cell : row) {
-                if (cell.getCellType() == CellType.FORMULA) {
-                    formulaCells.add(cell);
-                }
+    private static void deshareFormulasInRow(Row row) {
+        if (row == null) return;
+
+        var formulaCells = new ArrayList<Cell>();
+        for (var cell : row) {
+            if (cell.getCellType() == CellType.FORMULA) {
+                formulaCells.add(cell);
             }
+        }
 
-            for (var cell : formulaCells) {
-                var col = cell.getColumnIndex();
-                var style = cell.getCellStyle();
-                var formula = rawFormulaText(cell);
+        for (var cell : formulaCells) {
+            var col = cell.getColumnIndex();
+            var style = cell.getCellStyle();
+            var formula = rawFormulaText(cell);
 
-                row.removeCell(cell);
-                var newCell = row.createCell(col);
-                newCell.setCellStyle(style);
-                newCell.setCellFormula(formula);
-            }
+            row.removeCell(cell);
+            var newCell = row.createCell(col);
+            newCell.setCellStyle(style);
+            newCell.setCellFormula(formula);
         }
     }
 
