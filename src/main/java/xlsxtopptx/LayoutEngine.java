@@ -74,7 +74,14 @@ public final class LayoutEngine {
         // MIN_ROW_HEIGHT_PT) -- so a shrink-if-needed safety net always applies. Growing past the
         // natural size to fill the available space is opt-in via scaleToFitWidth/scaleToFitHeight;
         // left off, the table just keeps its natural (possibly smaller) size.
-        var wGrow = wSum > 0 ? (scaleToFitWidth ? availableWidth / wSum : Math.min(1.0, availableWidth / wSum)) : 1.0;
+        double wGrow;
+        if (wSum <= 0) {
+            wGrow = 1.0;
+        } else if (scaleToFitWidth) {
+            wGrow = availableWidth / wSum;
+        } else {
+            wGrow = Math.min(1.0, availableWidth / wSum);
+        }
         for (int c = 0; c < numCols; c++) colWidths[c] *= wGrow;
         return colWidths;
     }
@@ -89,7 +96,14 @@ public final class LayoutEngine {
             rowHeights[r] = naturalRowHeight(rows.get(r), r, fontScale, mergeIndex);
             hSum += rowHeights[r];
         }
-        var hGrow = hSum > 0 ? (scaleToFitHeight ? availableHeight / hSum : Math.min(1.0, availableHeight / hSum)) : 1.0;
+        double hGrow;
+        if (hSum <= 0) {
+            hGrow = 1.0;
+        } else if (scaleToFitHeight) {
+            hGrow = availableHeight / hSum;
+        } else {
+            hGrow = Math.min(1.0, availableHeight / hSum);
+        }
         for (int r = 0; r < rows.size(); r++) rowHeights[r] *= hGrow;
         return rowHeights;
     }
@@ -110,13 +124,13 @@ public final class LayoutEngine {
         var maxNeeded = LayoutConstants.MIN_COL_WIDTH_PT;
         for (int r = 0; r < rows.size(); r++) {
             var pos = new CellPos(r, col);
-            if (mergeIndex.isCovered(pos) || mergeIndex.isWideAnchor(pos)) continue;
             var cell = rows.get(r).cellAt(col);
-            if (cell.isEmpty()) continue;
-            var baseFont = cell.fontSize() > 0 ? cell.fontSize() : LayoutConstants.DEFAULT_FONT_PT;
-            var charFactor = LayoutConstants.CHAR_WIDTH_FACTOR * (cell.bold() ? 1.1 : 1.0);
-            var width = cell.text().length() * (baseFont * fontScale) * charFactor + LayoutConstants.CELL_PADDING_PT;
-            maxNeeded = Math.max(maxNeeded, width);
+            if (!mergeIndex.isCovered(pos) && !mergeIndex.isWideAnchor(pos) && !cell.isEmpty()) {
+                var baseFont = cell.fontSize() > 0 ? cell.fontSize() : LayoutConstants.DEFAULT_FONT_PT;
+                var charFactor = LayoutConstants.CHAR_WIDTH_FACTOR * (cell.bold() ? 1.1 : 1.0);
+                var width = cell.text().length() * (baseFont * fontScale) * charFactor + LayoutConstants.CELL_PADDING_PT;
+                maxNeeded = Math.max(maxNeeded, width);
+            }
         }
         return maxNeeded;
     }
@@ -125,12 +139,12 @@ public final class LayoutEngine {
         var maxNeeded = LayoutConstants.MIN_ROW_HEIGHT_PT;
         for (int c = 0; c < row.cells().size(); c++) {
             var pos = new CellPos(rowIdx, c);
-            if (mergeIndex.isCovered(pos) || mergeIndex.isTallAnchor(pos)) continue;
             var cell = row.cellAt(c);
-            if (cell.isEmpty()) continue;
-            var baseFont = cell.fontSize() > 0 ? cell.fontSize() : LayoutConstants.DEFAULT_FONT_PT;
-            var needed = (baseFont * fontScale) * LayoutConstants.LINE_HEIGHT_FACTOR + LayoutConstants.ROW_PADDING_PT;
-            maxNeeded = Math.max(maxNeeded, needed);
+            if (!mergeIndex.isCovered(pos) && !mergeIndex.isTallAnchor(pos) && !cell.isEmpty()) {
+                var baseFont = cell.fontSize() > 0 ? cell.fontSize() : LayoutConstants.DEFAULT_FONT_PT;
+                var needed = (baseFont * fontScale) * LayoutConstants.LINE_HEIGHT_FACTOR + LayoutConstants.ROW_PADDING_PT;
+                maxNeeded = Math.max(maxNeeded, needed);
+            }
         }
         return maxNeeded;
     }
