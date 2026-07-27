@@ -34,6 +34,32 @@ tasks.named('test') {
     }
 }
 
+// The README tutorial's generator class lives in its own source set so it's runnable without
+// shipping example code (or Lombok/POI-heavy demo classes) inside the library's own jar.
+sourceSets {
+    examples {
+        java {
+            srcDirs = ['examples/src/main/java']
+        }
+    }
+}
+
+dependencies {
+    examplesImplementation sourceSets.main.output
+    examplesImplementation 'org.apache.poi:poi-ooxml:5.5.1'
+    examplesRuntimeOnly 'org.slf4j:slf4j-simple:2.0.16'
+    examplesCompileOnly 'org.projectlombok:lombok:1.18.46'
+    examplesAnnotationProcessor 'org.projectlombok:lombok:1.18.46'
+}
+
+tasks.register('runExample', JavaExec) {
+    group = 'application'
+    description = 'Regenerates the README tutorial\'s example files under examples/'
+    classpath = sourceSets.examples.runtimeClasspath
+    mainClass = 'xlsxtopptx.example.BudgetOffsiteExample'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+}
+
 java {
     // A toolchain (rather than sourceCompatibility/targetCompatibility) lets Gradle itself keep
     // running on whatever JDK launched it while compiling and running this project's code on
