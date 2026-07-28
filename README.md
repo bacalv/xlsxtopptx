@@ -233,6 +233,72 @@ after it in the same deck:
 ./gradlew test
 ```
 
+## Test fixtures for downstream services
+
+Services that call this library end-to-end -- generate a `.xlsx` or `.pptx`
+and assert on the result -- run into the same problem: two files built from
+identical inputs are never byte-identical. Timestamps in `core.xml`, calc
+chain ordering, and other writer-run noise change every time, even though
+the sheets, formulas, styling, and slides are indistinguishable to a human
+opening either file. `xlsx-to-pptx-test-fixtures`, published from this
+project's `testFixtures` source set, provides `SpreadsheetAssert` and
+`SlideshowAssert` -- assertions that compare two files for *semantic*
+equality instead, so a test can regenerate a file and compare it against a
+stored expected copy without false failures.
+
+Depend on it the way Gradle's `java-test-fixtures` plugin expects:
+
+```groovy
+testImplementation testFixtures(project(':xlsx-to-pptx')) // same build
+// or, once published to a Maven repo:
+testImplementation testFixtures('com.example:xlsx-to-pptx:1.0.0')
+```
+
+### `SpreadsheetAssert`
+
+```java
+SpreadsheetAssert.assertEquals(expectedXlsxBytes, actualXlsxBytes);
+SpreadsheetAssert.assertEquals("budget export regression", expectedXlsxBytes, actualXlsxBytes);
+```
+
+Compares, sheet by sheet: sheet names, merged regions (including "center
+across selection"), and every cell's text, formula, fill/font color,
+bold/italic, font size and name, alignment, and borders. Two sheets of
+different sizes are compared cell-by-cell up to the larger of the two
+dimensions rather than throwing, so an extra row or column shows up as a
+list of differences instead of an index-out-of-bounds error.
+
+### `SlideshowAssert`
+
+```java
+SlideshowAssert.assertEquals(expectedPptxBytes, actualPptxBytes);
+SlideshowAssert.assertEquals("slide deck regression", expectedPptxBytes, actualPptxBytes);
+```
+
+Compares, slide by slide: page size, background color, and each shape in
+order -- position/size (within half a point), text and run styling
+(bold/italic/size/color/hyperlink), table cell text/spans/fills/borders,
+and picture bytes for images. Shapes are matched positionally and by exact
+class, so a shape count or type mismatch is reported rather than causing a
+misaligned comparison further down the slide.
+
+### What both ignore, and what they report
+
+Neither assertion looks at `core.xml` properties (created/modified
+timestamps, revision), relationship id numbering, auto-generated shape
+names, or XML attribute/element ordering -- exactly the noise that makes
+two writer runs of "the same" file differ at the byte level. Regenerating a
+file from the same inputs at a different time should always compare equal.
+
+Both throw a plain `AssertionError` on failure (not a JUnit-specific
+exception), so they work the same under JUnit, TestNG, or any other runner.
+The message lists every difference found, e.g.:
+
+```
+spreadsheets are not semantically equal - 1 difference:
+  - sheet[0] "Funding Requests": cell[row=5, col=0]: text: expected="Item One" actual="Item One (renamed)"
+```
+
 ## Background
 
 This started as a direct Java/Apache POI port of a Python prototype
