@@ -70,6 +70,8 @@ responsibility.
 | `templateInput`      | `InputStream` | `null` (blank slide)     | A `.pptx` whose first slide is reused as the base for the output (e.g. one carrying a logo or other branding) instead of creating a blank presentation/slide. Like `excelInput`, read but never closed by `convert`. |
 | `tableArea`          | `Rectangle2D` | `null` (default area)    | The exact rectangle (in points, relative to the slide's top-left corner) the table is laid out into, overriding the default margin-based area. Useful together with `templateInput` to fit the table around existing template content. |
 | `title`              | `String`      | `null` (no title)        | Rendered as a bold title textbox at the top of the slide. Left unset, no title is added at all. |
+| `linkUrl`            | `String`      | `null` (no link)         | Rendered as a small hyperlinked textbox in the slide's bottom margin -- e.g. a link to wherever the source spreadsheet can be downloaded. Left unset, no link is added at all. |
+| `linkText`           | `String`      | `linkUrl` itself         | The link's visible, clickable label. Only used when `linkUrl` is also set. |
 
 ## Tutorial: spreadsheet template to branded slideshow
 

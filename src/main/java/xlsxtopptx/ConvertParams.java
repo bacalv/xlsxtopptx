@@ -34,6 +34,11 @@ import java.io.InputStream;
  *
  * <p>{@code title}, when set, is rendered as a bold title textbox at the top of the slide. Left
  * unset (the default), no title is rendered at all.
+ *
+ * <p>{@code linkUrl}, when set, is rendered as a small hyperlinked textbox in the slide's bottom
+ * margin -- e.g. a link to wherever the source spreadsheet can be downloaded -- with {@code
+ * linkText} as its visible label, or {@code linkUrl} itself if {@code linkText} is left unset.
+ * Left unset (the default), no link is rendered at all.
  */
 @Getter
 @Builder
@@ -49,4 +54,6 @@ public class ConvertParams {
     private final InputStream templateInput;
     private final Rectangle2D tableArea;
     private final String title;
+    private final String linkUrl;
+    private final String linkText;
 }

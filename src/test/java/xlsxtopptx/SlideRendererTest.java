@@ -78,6 +78,39 @@ class SlideRendererTest {
     }
 
     @Test
+    void sourceLinkTextAndHyperlinkAddressAreSetCorrectly() throws Exception {
+        try (var ppt = new XMLSlideShow()) {
+            var slide = ppt.createSlide();
+            SlideRenderer.addSourceLink(ppt, slide, "https://example.com/budget.xlsx", "Download the spreadsheet");
+
+            var textBox = (XSLFTextBox) slide.getShapes().stream()
+                .filter(XSLFTextBox.class::isInstance)
+                .findFirst()
+                .orElseThrow();
+
+            assertEquals("Download the spreadsheet", textBox.getText());
+            var run = textBox.getTextParagraphs().get(0).getTextRuns().get(0);
+            assertTrue(run.isUnderlined());
+            assertEquals("https://example.com/budget.xlsx", run.getHyperlink().getAddress());
+        }
+    }
+
+    @Test
+    void sourceLinkFallsBackToShowingTheUrlWhenTextIsNotGiven() throws Exception {
+        try (var ppt = new XMLSlideShow()) {
+            var slide = ppt.createSlide();
+            SlideRenderer.addSourceLink(ppt, slide, "https://example.com/budget.xlsx", null);
+
+            var textBox = (XSLFTextBox) slide.getShapes().stream()
+                .filter(XSLFTextBox.class::isInstance)
+                .findFirst()
+                .orElseThrow();
+
+            assertEquals("https://example.com/budget.xlsx", textBox.getText());
+        }
+    }
+
+    @Test
     void cellTextAndFontScaleAreApplied() throws Exception {
         try (var ppt = new XMLSlideShow()) {
             var slide = ppt.createSlide();

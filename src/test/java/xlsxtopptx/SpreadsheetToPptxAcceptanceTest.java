@@ -94,6 +94,38 @@ class SpreadsheetToPptxAcceptanceTest {
     }
 
     @Test
+    void linkIsRenderedWithHyperlinkWhenSupplied() throws Exception {
+        convertFixture(b -> b.linkUrl("https://example.com/budget.xlsx").linkText("Download the spreadsheet"));
+
+        try (var ppt = new XMLSlideShow(Files.newInputStream(pptxPath))) {
+            var slide = ppt.getSlides().get(0);
+            var textBox = (XSLFTextBox) slide.getShapes().stream()
+                .filter(XSLFTextBox.class::isInstance)
+                .findFirst()
+                .orElseThrow();
+
+            assertEquals("Download the spreadsheet", textBox.getText());
+            var run = textBox.getTextParagraphs().get(0).getTextRuns().get(0);
+            assertEquals("https://example.com/budget.xlsx", run.getHyperlink().getAddress());
+        }
+    }
+
+    @Test
+    void linkTextDefaultsToTheUrlWhenNotSupplied() throws Exception {
+        convertFixture(b -> b.linkUrl("https://example.com/budget.xlsx"));
+
+        try (var ppt = new XMLSlideShow(Files.newInputStream(pptxPath))) {
+            var slide = ppt.getSlides().get(0);
+            var textBox = (XSLFTextBox) slide.getShapes().stream()
+                .filter(XSLFTextBox.class::isInstance)
+                .findFirst()
+                .orElseThrow();
+
+            assertEquals("https://example.com/budget.xlsx", textBox.getText());
+        }
+    }
+
+    @Test
     void tableHasTheExpectedDimensions() throws Exception {
         convertFixture();
 

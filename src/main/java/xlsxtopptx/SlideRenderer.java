@@ -35,6 +35,32 @@ public final class SlideRenderer {
         setEndParaRPrSize(para, 16.0);
     }
 
+    /** Adds a small hyperlinked textbox in the slide's bottom margin -- independent of the table's
+     *  actual size, so it lands in the same place whether the table fills the slide or leaves it
+     *  mostly empty (e.g. a link to where the source spreadsheet can be downloaded). {@code text}
+     *  is the visible, clickable label; when null or blank, {@code url} itself is shown instead. */
+    public static void addSourceLink(XMLSlideShow ppt, XSLFSlide slide, String url, String text) {
+        var pageSize = ppt.getPageSize();
+        var link = slide.createTextBox();
+        link.setAnchor(new Rectangle2D.Double(
+            LayoutConstants.MARGIN_PT, pageSize.getHeight() - LayoutConstants.MARGIN_PT,
+            pageSize.getWidth() - 2 * LayoutConstants.MARGIN_PT, LayoutConstants.LINK_HEIGHT_PT));
+
+        var existingParagraphs = link.getTextParagraphs();
+        var para = existingParagraphs.isEmpty() ? link.addNewTextParagraph() : existingParagraphs.get(0);
+        var existingRuns = para.getTextRuns();
+        var run = existingRuns.isEmpty() ? para.addNewTextRun() : existingRuns.get(0);
+
+        para.setSpaceBefore(0.0);
+        para.setSpaceAfter(0.0);
+        para.setLineSpacing(100.0);
+        run.setText(text != null && !text.isBlank() ? text : url);
+        run.setFontSize(LayoutConstants.LINK_FONT_PT);
+        run.setUnderlined(true);
+        run.setFontColor(LayoutConstants.LINK_FONT_COLOR);
+        run.createHyperlink().setAddress(url);
+    }
+
     public static void renderTable(XSLFTable table, SheetSnapshot sheet, MergeIndex mergeIndex, double fontScale) {
         var rows = sheet.rows();
         for (int r = 0; r < rows.size(); r++) {

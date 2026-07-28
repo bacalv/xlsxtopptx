@@ -69,6 +69,9 @@ public final class SpreadsheetToPptx {
             if (params.getTitle() != null && !params.getTitle().isBlank()) {
                 SlideRenderer.addTitle(ppt, slide, params.getTitle());
             }
+            if (params.getLinkUrl() != null && !params.getLinkUrl().isBlank()) {
+                SlideRenderer.addSourceLink(ppt, slide, params.getLinkUrl(), params.getLinkText());
+            }
 
             var table = slide.createTable(sheetSnapshot.rowCount(), sheetSnapshot.numCols());
             // A sheet narrower than its target area (i.e. scaleToFitWidth is off and the content

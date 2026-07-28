@@ -28,4 +28,8 @@ public final class LayoutConstants {
     public static final Color DEFAULT_BORDER_COLOR = Color.BLACK;
     public static final Color DEFAULT_FONT_COLOR = Color.BLACK;
     public static final String DEFAULT_FONT_FAMILY = "Calibri";
+
+    public static final double LINK_HEIGHT_PT = 16;
+    public static final double LINK_FONT_PT = 9.0;
+    public static final Color LINK_FONT_COLOR = new Color(0x05, 0x63, 0xC1);
 }
