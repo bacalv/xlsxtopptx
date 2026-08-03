@@ -7,7 +7,8 @@ cells (including vertical merges spanning many rows).
 
 Beyond converting a single fixed sheet, `SpreadsheetTemplate` renders a
 variable number of data rows onto a hand-authored "row template" (marker
-rows, per-row formulas, named-range totals that grow or shrink to fit), and
+rows, per-row formulas, named-range totals that grow or shrink to fit), or
+overwrites a fixed-size block of cells in place via `replaceRange`, and
 `PptxMerger` stitches multiple slides -- e.g. a title slide and one or more
 data slides -- into a single deck. The [tutorial](#tutorial-spreadsheet-template-to-branded-slideshow)
 below walks through both, end to end.
@@ -165,6 +166,40 @@ still add up correctly with no other changes.
 The title now reads "as of 27 Jul 2026", six line items appear where the
 template had three marker rows, and Total (now on row 9) still sums
 correctly.
+
+### Overwriting a fixed block (`replaceRange`)
+
+Row-expansion isn't the only way to get data into a template. `replaceRange`
+overwrites a **fixed-size** block of cells in place instead -- no growing or
+shrinking -- for something like a small KPI grid that's always exactly the
+same shape:
+
+```java
+rendered = SpreadsheetTemplate.of(templateInput)
+    .replaceRange("Sheet1", "A1:B3", List.of(
+        List.of("Revenue", 128000),
+        List.of("Costs", 94000),
+        List.of("Margin", 34000)))
+    .render(rows); // or .render(List.of()) if there's no row-expansion to run
+```
+
+- `values` (row-major, one inner list per row) must exactly match the
+  range's row/column count, or `render` throws.
+- Existing cell styles are kept -- only the value changes. A cell that
+  currently holds a formula is overwritten with a literal the same way
+  typing over it in Excel would.
+- It can target *any* sheet in the workbook, not just the one row-expansion
+  runs on -- pass its name as the first argument.
+- `render` applies every `replaceRange` before row-expansion, so a range
+  sitting below the marker block (e.g. a footer note after the Total row) is
+  carried along by the same row-shifting that moves the Total row itself,
+  rather than needing its address computed for wherever the marker block
+  ends up landing.
+- A range overlapping the marker block itself is rejected -- that region
+  belongs to row-expansion.
+- `render` can be called with an empty row list as long as at least one
+  `replaceRange` was registered, so it also works standalone on a sheet with
+  no `%_` markers at all.
 
 ### 3. Convert to a branded slide (`SpreadsheetToPptx`)
 

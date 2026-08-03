@@ -3,6 +3,7 @@ package xlsxtopptx;
 import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.CellType;
 import org.apache.poi.ss.usermodel.Row;
+import org.apache.poi.ss.util.CellRangeAddress;
 import org.apache.poi.xssf.usermodel.XSSFName;
 import org.apache.poi.xssf.usermodel.XSSFSheet;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
@@ -40,6 +41,19 @@ import java.util.regex.Pattern;
  * must have a matching {@link #placeholder} call and vice versa -- an unknown token is almost
  * always a typo in the template, and an unused one is almost always a stale or misspelled call
  * left behind after the template changed.
+ *
+ * <p>{@link #replaceRange} covers a third, unrelated need: overwriting a fixed-size block of
+ * cells (on any sheet, not just the marker sheet) with literal values, in place, with no row
+ * growth or shrinkage -- e.g. a small KPI grid that's always exactly 3x2. Existing cell styles
+ * are kept; only values change, and a formula cell is overwritten with a literal the same way
+ * typing over it in Excel would. {@link #render} applies every registered {@code replaceRange}
+ * before the row-expansion described above runs, so a range sitting below the marker block (e.g.
+ * a footer table after a grand-total row) is carried along by that same row-expansion's {@code
+ * shiftRows} call like any other trailing content, rather than needing its address computed in
+ * post-shift coordinates. A range overlapping the marker block itself is rejected, since that
+ * region is exclusively owned by row-expansion. Calling {@link #render} with no rows is allowed
+ * as long as at least one {@code replaceRange} was registered -- row-expansion (and its
+ * requirement that the sheet contain {@code %_<type>} markers) simply doesn't run.
  */
 public final class SpreadsheetTemplate {
     private static final Pattern TYPE_MARKER = Pattern.compile("%_(?!\\d+$)(.+)");
@@ -49,6 +63,7 @@ public final class SpreadsheetTemplate {
     private final XSSFWorkbook workbook;
     private final XSSFSheet sheet;
     private final Map<String, String> placeholders = new HashMap<>();
+    private final List<RangeReplacement> rangeReplacements = new ArrayList<>();
 
     private SpreadsheetTemplate(XSSFWorkbook workbook) {
         this.workbook = workbook;
@@ -67,45 +82,69 @@ public final class SpreadsheetTemplate {
         return this;
     }
 
+    /** Registers a fixed-size block of {@code values} (row-major, one inner list per row) to
+     *  overwrite in place at {@code a1Range} (e.g. {@code "A1:C5"}) on {@code sheetName} --
+     *  {@code values} must match {@code a1Range}'s row/column count exactly. See the class
+     *  Javadoc for how this interacts with row-expansion. Must be called before {@link #render}. */
+    public SpreadsheetTemplate replaceRange(String sheetName, String a1Range, List<List<Object>> values) {
+        rangeReplacements.add(new RangeReplacement(sheetName, CellRangeAddress.valueOf(a1Range), values));
+        return this;
+    }
+
     public byte[] render(List<SpreadsheetRow> rows) throws IOException {
-        if (rows.isEmpty()) {
-            throw new IllegalArgumentException("rows must not be empty");
+        if (rows.isEmpty() && rangeReplacements.isEmpty()) {
+            throw new IllegalArgumentException("rows must not be empty unless replaceRange(...) has been called");
         }
 
-        var prototypes = findRowPrototypes();
-        var unknownTypes = rows.stream().map(SpreadsheetRow::type).filter(t -> !prototypes.containsKey(t)).toList();
-        if (!unknownTypes.isEmpty()) {
-            throw new IllegalArgumentException(
-                "Unknown row type(s): " + unknownTypes + " -- known types: " + prototypes.keySet());
+        Map<String, RowPrototype> prototypes = Map.of();
+        var originalFirst = -1;
+        var originalLast = -1;
+        if (!rows.isEmpty()) {
+            var found = findRowPrototypes();
+            prototypes = found;
+            var unknownTypes = rows.stream().map(SpreadsheetRow::type).filter(t -> !found.containsKey(t)).toList();
+            if (!unknownTypes.isEmpty()) {
+                throw new IllegalArgumentException(
+                    "Unknown row type(s): " + unknownTypes + " -- known types: " + prototypes.keySet());
+            }
+            originalFirst = prototypes.values().stream().mapToInt(p -> p.rowIndex).min().orElseThrow();
+            originalLast = prototypes.values().stream().mapToInt(p -> p.rowIndex).max().orElseThrow();
         }
 
-        var originalFirst = prototypes.values().stream().mapToInt(p -> p.rowIndex).min().orElseThrow();
-        var originalLast = prototypes.values().stream().mapToInt(p -> p.rowIndex).max().orElseThrow();
-        var newLast = originalFirst + rows.size() - 1;
-        var delta = newLast - originalLast;
+        // Applied before row-expansion below so that a registered range sitting below the marker
+        // block is written at its original template address, then carried along -- like any other
+        // trailing content -- when shiftRows moves that address to make room for the actual output
+        // row count.
+        applyRangeReplacements(originalFirst, originalLast);
 
-        // De-shares formulas below the marker block regardless of delta: a human-authored
-        // trailing row (e.g. a grand total someone dragged a formula across in Excel/Sheets) can
-        // carry stale "shared formula" grouping even when row count -- and so delta -- ends up
-        // zero, which is enough on its own to make POI misread it later (see deshareFormulas).
-        if (originalLast < sheet.getLastRowNum()) {
-            deshareFormulas(originalLast + 1, sheet.getLastRowNum());
+        if (!rows.isEmpty()) {
+            var newLast = originalFirst + rows.size() - 1;
+            var delta = newLast - originalLast;
+
+            // De-shares formulas below the marker block regardless of delta: a human-authored
+            // trailing row (e.g. a grand total someone dragged a formula across in Excel/Sheets) can
+            // carry stale "shared formula" grouping even when row count -- and so delta -- ends up
+            // zero, which is enough on its own to make POI misread it later (see deshareFormulas).
+            if (originalLast < sheet.getLastRowNum()) {
+                deshareFormulas(originalLast + 1, sheet.getLastRowNum());
+            }
+
+            // Moves everything below the marker block (e.g. a grand-total row) so it sits directly
+            // after the output rows. Rows within the marker block itself are untouched by this --
+            // they're overwritten below regardless of delta's sign, since every prototype needed was
+            // already captured above.
+            if (delta != 0 && originalLast < sheet.getLastRowNum()) {
+                sheet.shiftRows(originalLast + 1, sheet.getLastRowNum(), delta);
+            }
+
+            for (int i = 0; i < rows.size(); i++) {
+                writeRow(originalFirst + i, prototypes.get(rows.get(i).type()), rows.get(i));
+            }
+
+            growNamedRanges(originalLast, newLast);
+            trimTrailingEmptyRows(newLast);
         }
 
-        // Moves everything below the marker block (e.g. a grand-total row) so it sits directly
-        // after the output rows. Rows within the marker block itself are untouched by this --
-        // they're overwritten below regardless of delta's sign, since every prototype needed was
-        // already captured above.
-        if (delta != 0 && originalLast < sheet.getLastRowNum()) {
-            sheet.shiftRows(originalLast + 1, sheet.getLastRowNum(), delta);
-        }
-
-        for (int i = 0; i < rows.size(); i++) {
-            writeRow(originalFirst + i, prototypes.get(rows.get(i).type()), rows.get(i));
-        }
-
-        growNamedRanges(originalLast, newLast);
-        trimTrailingEmptyRows(newLast);
         substitutePlaceholders();
 
         workbook.setForceFormulaRecalculation(true);
@@ -114,6 +153,69 @@ public final class SpreadsheetTemplate {
         var out = new ByteArrayOutputStream();
         workbook.write(out);
         return out.toByteArray();
+    }
+
+    /** Writes every registered {@link #replaceRange} block. {@code markerBlockFirstRow}/{@code
+     *  markerBlockLastRow} are the row-expansion marker block's bounds on {@link #sheet} (0-based,
+     *  inclusive), or {@code -1}/{@code -1} if {@link #render} was called with no rows -- in which
+     *  case no marker block exists on this sheet to guard against. */
+    private void applyRangeReplacements(int markerBlockFirstRow, int markerBlockLastRow) {
+        for (var replacement : rangeReplacements) {
+            applyRangeReplacement(replacement, markerBlockFirstRow, markerBlockLastRow);
+        }
+    }
+
+    private void applyRangeReplacement(RangeReplacement replacement, int markerBlockFirstRow, int markerBlockLastRow) {
+        var targetSheet = workbook.getSheet(replacement.sheetName());
+        if (targetSheet == null) {
+            throw new IllegalArgumentException("replaceRange: no such sheet \"" + replacement.sheetName() + "\"");
+        }
+
+        var range = replacement.range();
+        if (targetSheet == sheet && range.getFirstRow() <= markerBlockLastRow && range.getLastRow() >= markerBlockFirstRow) {
+            throw new IllegalArgumentException("replaceRange(\"" + replacement.sheetName() + "\", \"" + range.formatAsString()
+                + "\") overlaps the row-expansion marker block (rows " + (markerBlockFirstRow + 1) + "-" + (markerBlockLastRow + 1)
+                + ") -- that region is rewritten by row-expansion regardless of this call");
+        }
+
+        var expectedRows = range.getLastRow() - range.getFirstRow() + 1;
+        var expectedCols = range.getLastColumn() - range.getFirstColumn() + 1;
+        var values = replacement.values();
+        if (values.size() != expectedRows || values.stream().anyMatch(row -> row.size() != expectedCols)) {
+            throw new IllegalArgumentException("replaceRange(\"" + replacement.sheetName() + "\", \"" + range.formatAsString()
+                + "\") needs a " + expectedRows + "x" + expectedCols + " grid of values");
+        }
+
+        for (int r = 0; r < expectedRows; r++) {
+            var row = targetSheet.getRow(range.getFirstRow() + r);
+            if (row == null) {
+                row = targetSheet.createRow(range.getFirstRow() + r);
+            }
+            for (int c = 0; c < expectedCols; c++) {
+                setValue(freshValueCell(row, range.getFirstColumn() + c), values.get(r).get(c));
+            }
+        }
+    }
+
+    /** The cell at {@code col} in {@code row}, ready to take a literal value -- creating it if
+     *  absent. {@code Cell.setCellValue()} on an existing {@code FORMULA} cell only updates its
+     *  cached result and deliberately leaves the cell type as {@code FORMULA} (per its own
+     *  Javadoc), so such a cell is recreated from scratch first, the same way {@link
+     *  #deshareFormulasInRow} resets a cell's type -- keeping its style. */
+    private static Cell freshValueCell(Row row, int col) {
+        var existing = row.getCell(col);
+        if (existing == null) {
+            return row.createCell(col);
+        }
+        if (existing.getCellType() != CellType.FORMULA) {
+            return existing;
+        }
+
+        var style = existing.getCellStyle();
+        row.removeCell(existing);
+        var cell = row.createCell(col);
+        cell.setCellStyle(style);
+        return cell;
     }
 
     /** Scans the sheet for {@code %_<type>} marker cells and captures each marked row's cell
@@ -354,6 +456,10 @@ public final class SpreadsheetTemplate {
         if (bangIndex < 0) return false;
         var sheetPart = reference.substring(0, bangIndex).replace("'", "");
         return sheetPart.equals(sheet.getSheetName());
+    }
+
+    /** One pending {@link #replaceRange} call, held until {@link #render} applies it. */
+    private record RangeReplacement(String sheetName, CellRangeAddress range, List<List<Object>> values) {
     }
 
     /** A captured, in-memory snapshot of one marker row, taken before any row in the sheet is

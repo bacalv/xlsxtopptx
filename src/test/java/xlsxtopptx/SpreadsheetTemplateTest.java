@@ -178,6 +178,159 @@ class SpreadsheetTemplateTest {
     }
 
     @Test
+    void replaceRangeOverwritesValuesPreservingStyleAndConvertingFormulasToLiterals() throws Exception {
+        var template = buildTemplateWithReplaceableBlock();
+        var rendered = SpreadsheetTemplate.of(new ByteArrayInputStream(template))
+            .replaceRange(SHEET, "A1:B2", List.of(
+                List.of("Q1", 100),
+                List.of("Q2", 200)))
+            .render(List.of());
+
+        var workbook = new XSSFWorkbook(new ByteArrayInputStream(rendered));
+        var sheet = workbook.getSheetAt(0);
+
+        assertEquals("Q1", sheet.getRow(0).getCell(0).getStringCellValue());
+        assertTrue(sheet.getRow(0).getCell(0).getCellStyle().getFont().getBold()); // pre-existing style kept
+        assertEquals(CellType.NUMERIC, sheet.getRow(0).getCell(1).getCellType()); // formula cell -> literal
+        assertEquals(100.0, sheet.getRow(0).getCell(1).getNumericCellValue());
+
+        assertEquals("Q2", sheet.getRow(1).getCell(0).getStringCellValue());
+        assertEquals(200.0, sheet.getRow(1).getCell(1).getNumericCellValue());
+    }
+
+    @Test
+    void replaceRangeSizeMismatchThrows() throws IOException {
+        var template = buildTemplateWithReplaceableBlock();
+        var ex = assertThrows(IllegalArgumentException.class, () -> SpreadsheetTemplate.of(new ByteArrayInputStream(template))
+            .replaceRange(SHEET, "A1:B2", List.of(List.of("Only one row", 1)))
+            .render(List.of()));
+        assertTrue(ex.getMessage().contains("2x2"));
+    }
+
+    @Test
+    void replaceRangeUnknownSheetThrows() throws IOException {
+        var template = buildTemplate(false);
+        var ex = assertThrows(IllegalArgumentException.class, () -> SpreadsheetTemplate.of(new ByteArrayInputStream(template))
+            .replaceRange("NoSuchSheet", "A1:A1", List.of(List.of("x")))
+            .render(List.of(SpreadsheetRow.type("BOLD").data("Row A", 1, 2).build())));
+        assertTrue(ex.getMessage().contains("NoSuchSheet"));
+    }
+
+    @Test
+    void replaceRangeOverlappingTheMarkerBlockThrows() throws IOException {
+        var template = buildTemplate(false);
+        var ex = assertThrows(IllegalArgumentException.class, () -> SpreadsheetTemplate.of(new ByteArrayInputStream(template))
+            .replaceRange(SHEET, "A1:A1", List.of(List.of("x")))
+            .render(List.of(SpreadsheetRow.type("BOLD").data("Row A", 1, 2).build())));
+        assertTrue(ex.getMessage().contains("marker block"));
+    }
+
+    @Test
+    void replaceRangeBelowTheMarkerBlockRidesTheRowShift() throws Exception {
+        // The whole reason replaceRange applies before row-expansion: a range written at its
+        // original template address (here A5:B5, just below the Total row) must be carried along
+        // when shiftRows moves that address to make room for a bigger output row count, the same
+        // way the pre-existing Total row's own content is.
+        var template = buildTemplateWithFooterRow();
+        var rendered = SpreadsheetTemplate.of(new ByteArrayInputStream(template))
+            .replaceRange(SHEET, "A5:B5", List.of(List.of("Reviewed by", "Finance")))
+            .render(List.of(
+                SpreadsheetRow.type("BOLD").data("Row A", 1, 2).build(),
+                SpreadsheetRow.type("PLAIN").data("Row B", 3, 4).build(),
+                SpreadsheetRow.type("PLAIN").data("Row C", 5, 6).build(),
+                SpreadsheetRow.type("PLAIN").data("Row D", 7, 8).build()));
+
+        var workbook = new XSSFWorkbook(new ByteArrayInputStream(rendered));
+        var footerRow = workbook.getSheetAt(0).getRow(5); // moved from index 4 to 5 by the +1 row-count delta
+        assertEquals("Reviewed by", footerRow.getCell(0).getStringCellValue());
+        assertTrue(footerRow.getCell(0).getCellStyle().getFont().getItalic()); // pre-existing style kept
+        assertEquals("Finance", footerRow.getCell(1).getStringCellValue());
+    }
+
+    @Test
+    void replaceRangeOnAnotherSheetIsUnaffectedByRowExpansionOnTheFirstSheet() throws Exception {
+        var template = buildTemplateWithSecondSheetReferencingTotalRow();
+        var rendered = SpreadsheetTemplate.of(new ByteArrayInputStream(template))
+            .replaceRange("Summary", "B1:B1", List.of(List.of("Note")))
+            .render(List.of(
+                SpreadsheetRow.type("BOLD").data("Row A", 1, 2).build(),
+                SpreadsheetRow.type("PLAIN").data("Row B", 3, 4).build(),
+                SpreadsheetRow.type("PLAIN").data("Row C", 5, 6).build(),
+                SpreadsheetRow.type("PLAIN").data("Row D", 7, 8).build()));
+
+        var workbook = new XSSFWorkbook(new ByteArrayInputStream(rendered));
+        var summary = workbook.getSheetAt(1);
+        assertEquals("Note", summary.getRow(0).getCell(1).getStringCellValue());
+        // the pre-existing cross-sheet formula in A1 still follows the shift as before
+        assertEquals(SHEET + "!A5", summary.getRow(0).getCell(0).getCellFormula());
+    }
+
+    private static byte[] buildTemplateWithReplaceableBlock() throws IOException {
+        try (var workbook = new XSSFWorkbook()) {
+            var sheet = workbook.createSheet(SHEET);
+
+            var boldFont = workbook.createFont();
+            boldFont.setBold(true);
+            var boldStyle = workbook.createCellStyle();
+            boldStyle.setFont(boldFont);
+
+            var row0 = sheet.createRow(0);
+            var a1 = row0.createCell(0);
+            a1.setCellValue("placeholder");
+            a1.setCellStyle(boldStyle);
+            row0.createCell(1).setCellFormula("1+1");
+
+            var row1 = sheet.createRow(1);
+            row1.createCell(0).setCellValue("placeholder");
+            row1.createCell(1).setCellValue(0);
+
+            var out = new ByteArrayOutputStream();
+            workbook.write(out);
+            return out.toByteArray();
+        }
+    }
+
+    private static byte[] buildTemplateWithFooterRow() throws IOException {
+        try (var workbook = new XSSFWorkbook()) {
+            var sheet = workbook.createSheet(SHEET);
+
+            var italicFont = workbook.createFont();
+            italicFont.setItalic(true);
+            var italicStyle = workbook.createCellStyle();
+            italicStyle.setFont(italicFont);
+
+            markerRow(sheet, 0, "%_BOLD", null, "SUM(B1:C1)");
+            var blankRow = sheet.createRow(1);
+            blankRow.createCell(0).setCellValue("%_BLANK");
+            markerRow(sheet, 2, "%_PLAIN", null, "SUM(B3:C3)");
+
+            var nameB = workbook.createName();
+            nameB.setNameName("COL_B_VALUES");
+            nameB.setRefersToFormula(SHEET + "!$B$1:$B$3");
+            var nameC = workbook.createName();
+            nameC.setNameName("COL_C_VALUES");
+            nameC.setRefersToFormula(SHEET + "!$C$1:$C$3");
+
+            var totalRow = sheet.createRow(3);
+            totalRow.createCell(0).setCellValue("Total");
+            totalRow.createCell(1).setCellFormula("SUM(COL_B_VALUES)");
+            totalRow.createCell(2).setCellFormula("SUM(COL_C_VALUES)");
+
+            var footerRow = sheet.createRow(4);
+            var footerA = footerRow.createCell(0);
+            footerA.setCellValue("PENDING");
+            footerA.setCellStyle(italicStyle);
+            var footerB = footerRow.createCell(1);
+            footerB.setCellValue("PENDING");
+            footerB.setCellStyle(italicStyle);
+
+            var out = new ByteArrayOutputStream();
+            workbook.write(out);
+            return out.toByteArray();
+        }
+    }
+
+    @Test
     void boldStyleIsPreservedPerType() throws Exception {
         var rendered = render(buildTemplate(false), List.of(
             SpreadsheetRow.type("BOLD").data("Row A", 1, 2).build(),
