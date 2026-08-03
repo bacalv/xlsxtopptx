@@ -125,6 +125,59 @@ class SpreadsheetTemplateTest {
     }
 
     @Test
+    void crossSheetDirectReferenceFollowsTheRowShift() throws Exception {
+        // A direct (non-named-range) reference from another sheet into rows below the marker
+        // block -- e.g. "=Sheet1!A4" on a Summary sheet pointing at the grand-total row -- must
+        // keep pointing at that row even after it's physically moved by sheet.shiftRows(). This
+        // isn't code this class writes itself: XSSFSheet.shiftRows() walks every sheet in the
+        // workbook (not just the one being shifted) and rewrites any 3D formula reference whose
+        // sheet name matches, so it falls out of the existing shiftRows call for free.
+        var template = buildTemplateWithSecondSheetReferencingTotalRow();
+        var rendered = render(template, List.of(
+            SpreadsheetRow.type("BOLD").data("Row A", 1, 2).build(),
+            SpreadsheetRow.type("PLAIN").data("Row B", 3, 4).build(),
+            SpreadsheetRow.type("PLAIN").data("Row C", 5, 6).build(),
+            SpreadsheetRow.type("PLAIN").data("Row D", 7, 8).build()));
+
+        var summary = rendered.getSheetAt(1);
+        var cell = summary.getRow(0).getCell(0);
+        assertEquals(SHEET + "!A5", cell.getCellFormula()); // followed the Total row from A4 to A5
+
+        var evaluator = rendered.getCreationHelper().createFormulaEvaluator();
+        assertEquals("Total", evaluator.evaluate(cell).getStringValue());
+    }
+
+    private static byte[] buildTemplateWithSecondSheetReferencingTotalRow() throws IOException {
+        try (var workbook = new XSSFWorkbook()) {
+            var sheet = workbook.createSheet(SHEET);
+
+            markerRow(sheet, 0, "%_BOLD", null, "SUM(B1:C1)");
+            var blankRow = sheet.createRow(1);
+            blankRow.createCell(0).setCellValue("%_BLANK");
+            markerRow(sheet, 2, "%_PLAIN", null, "SUM(B3:C3)");
+
+            var nameB = workbook.createName();
+            nameB.setNameName("COL_B_VALUES");
+            nameB.setRefersToFormula(SHEET + "!$B$1:$B$3");
+            var nameC = workbook.createName();
+            nameC.setNameName("COL_C_VALUES");
+            nameC.setRefersToFormula(SHEET + "!$C$1:$C$3");
+
+            var totalRow = sheet.createRow(3);
+            totalRow.createCell(0).setCellValue("Total");
+            totalRow.createCell(1).setCellFormula("SUM(COL_B_VALUES)");
+            totalRow.createCell(2).setCellFormula("SUM(COL_C_VALUES)");
+
+            var summarySheet = workbook.createSheet("Summary");
+            summarySheet.createRow(0).createCell(0).setCellFormula(SHEET + "!A4");
+
+            var out = new ByteArrayOutputStream();
+            workbook.write(out);
+            return out.toByteArray();
+        }
+    }
+
+    @Test
     void boldStyleIsPreservedPerType() throws Exception {
         var rendered = render(buildTemplate(false), List.of(
             SpreadsheetRow.type("BOLD").data("Row A", 1, 2).build(),
