@@ -1,6 +1,7 @@
 package xlsxtopptx;
 
 import org.apache.poi.ss.usermodel.Cell;
+import org.apache.poi.ss.usermodel.CellType;
 import org.apache.poi.ss.usermodel.DataFormatter;
 import org.apache.poi.ss.usermodel.FillPatternType;
 import org.apache.poi.ss.usermodel.FormulaEvaluator;
@@ -8,8 +9,10 @@ import org.apache.poi.ss.usermodel.HorizontalAlignment;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.sl.usermodel.TextParagraph.TextAlign;
+import org.apache.poi.xssf.model.ThemesTable;
 import org.apache.poi.xssf.usermodel.XSSFCellStyle;
 import org.apache.poi.xssf.usermodel.XSSFColor;
+import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 
 import java.awt.Color;
 import java.util.ArrayList;
@@ -56,6 +59,7 @@ public final class SheetReader {
     private static List<RowSnapshot> readRows(Sheet sheet, int firstRow, int lastRow, int firstCol, int lastCol) {
         var evaluator = sheet.getWorkbook().getCreationHelper().createFormulaEvaluator();
         var formatter = new DataFormatter();
+        var themes = sheet.getWorkbook() instanceof XSSFWorkbook xwb ? xwb.getTheme() : null;
 
         var result = new ArrayList<RowSnapshot>();
         for (int r = firstRow; r <= lastRow; r++) {
@@ -63,14 +67,14 @@ public final class SheetReader {
             var cells = new ArrayList<CellSnapshot>();
             for (int c = firstCol; c <= lastCol; c++) {
                 var cell = row != null ? row.getCell(c) : null;
-                cells.add(readCell(cell, evaluator, formatter));
+                cells.add(readCell(cell, evaluator, formatter, themes));
             }
             result.add(new RowSnapshot(cells));
         }
         return result;
     }
 
-    private static CellSnapshot readCell(Cell cell, FormulaEvaluator evaluator, DataFormatter formatter) {
+    private static CellSnapshot readCell(Cell cell, FormulaEvaluator evaluator, DataFormatter formatter, ThemesTable themes) {
         if (cell == null) return CellSnapshot.empty();
 
         var text = formatter.formatCellValue(cell, evaluator);
@@ -90,18 +94,18 @@ public final class SheetReader {
         xStyle.getCoreXf().setApplyBorder(true);
 
         var fill = xStyle.getFillPattern() == FillPatternType.SOLID_FOREGROUND
-            ? toAwtColor(xStyle.getFillForegroundColorColor())
+            ? toAwtColor(xStyle.getFillForegroundColorColor(), themes)
             : null;
 
         var borders = new CellBorders(
-            new BorderEdgeStyle(xStyle.getBorderTop(), toAwtColor(xStyle.getTopBorderXSSFColor())),
-            new BorderEdgeStyle(xStyle.getBorderBottom(), toAwtColor(xStyle.getBottomBorderXSSFColor())),
-            new BorderEdgeStyle(xStyle.getBorderLeft(), toAwtColor(xStyle.getLeftBorderXSSFColor())),
-            new BorderEdgeStyle(xStyle.getBorderRight(), toAwtColor(xStyle.getRightBorderXSSFColor()))
+            new BorderEdgeStyle(xStyle.getBorderTop(), toAwtColor(xStyle.getTopBorderXSSFColor(), themes)),
+            new BorderEdgeStyle(xStyle.getBorderBottom(), toAwtColor(xStyle.getBottomBorderXSSFColor(), themes)),
+            new BorderEdgeStyle(xStyle.getBorderLeft(), toAwtColor(xStyle.getLeftBorderXSSFColor(), themes)),
+            new BorderEdgeStyle(xStyle.getBorderRight(), toAwtColor(xStyle.getRightBorderXSSFColor(), themes))
         );
 
         var font = xStyle.getFont();
-        var fontColor = toAwtColor(font.getXSSFColor());
+        var fontColor = toAwtColor(font.getXSSFColor(), themes);
 
         return new CellSnapshot(
             text,
@@ -111,9 +115,21 @@ public final class SheetReader {
             font.getItalic(),
             font.getFontHeightInPoints(),
             font.getFontName(),
-            mapAlign(xStyle.getAlignment()),
+            mapAlign(xStyle.getAlignment(), isNumericGeneral(cell, evaluator)),
             borders
         );
+    }
+
+    /** Excel's default "General" horizontal alignment right-aligns numbers/dates and left-aligns
+     *  text -- it isn't simply "left". A cell with no explicit alignment override reports
+     *  HorizontalAlignment.GENERAL, so this resolves what that actually renders as by checking
+     *  the cell's (possibly formula-evaluated) value type. */
+    private static boolean isNumericGeneral(Cell cell, FormulaEvaluator evaluator) {
+        var type = cell.getCellType();
+        if (type == CellType.FORMULA) {
+            type = evaluator.evaluateFormulaCell(cell);
+        }
+        return type == CellType.NUMERIC;
     }
 
     // ---------- merges ----------
@@ -181,16 +197,25 @@ public final class SheetReader {
 
     // ---------- small conversions ----------
 
-    private static Color toAwtColor(XSSFColor color) {
+    /** Colors picked from Excel's "Theme Colors" palette (as opposed to "Standard Colors" or a
+     *  custom RGB) are stored as a theme index plus an optional tint -- e.g. the light banded-row
+     *  blue in a table is typically "Blue, Accent 1, Lighter 60%", not an RGB value at all.
+     *  {@link XSSFColor#getRGB()} only ever returns an explicitly-stored RGB, so a themed color
+     *  resolves to null (dropping the fill/border/font color entirely) unless it's first resolved
+     *  against the workbook's theme, and the tint reapplied on top of that base color. */
+    private static Color toAwtColor(XSSFColor color, ThemesTable themes) {
         if (color == null) return null;
-        var rgb = color.getRGB();
+        if (themes != null) themes.inheritFromThemeAsRequired(color);
+        var rgb = color.getRGBWithTint();
+        if (rgb == null) rgb = color.getRGB();
         if (rgb == null) return null;
         return new Color(rgb[0] & 0xFF, rgb[1] & 0xFF, rgb[2] & 0xFF);
     }
 
-    private static TextAlign mapAlign(HorizontalAlignment alignment) {
+    private static TextAlign mapAlign(HorizontalAlignment alignment, boolean numericGeneral) {
         return switch (alignment) {
-            case null -> TextAlign.LEFT;
+            case null -> numericGeneral ? TextAlign.RIGHT : TextAlign.LEFT;
+            case GENERAL -> numericGeneral ? TextAlign.RIGHT : TextAlign.LEFT;
             case CENTER, CENTER_SELECTION -> TextAlign.CENTER;
             case RIGHT -> TextAlign.RIGHT;
             case JUSTIFY -> TextAlign.JUSTIFY;
