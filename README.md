@@ -11,7 +11,11 @@ rows, per-row formulas, named-range totals that grow or shrink to fit), or
 overwrites a fixed-size block of cells in place via `replaceRange`, and
 `PptxMerger` stitches multiple slides -- e.g. a title slide and one or more
 data slides -- into a single deck. The [tutorial](#tutorial-spreadsheet-template-to-branded-slideshow)
-below walks through both, end to end.
+below walks through both, end to end. `PresentationBuilder` covers a related
+but different need: given a whole multi-slide `.pptx` deck already laid out
+with placeholder text, fill in every slide's tables and text tokens from one
+workbook in a single pass -- see
+[Merging a multi-slide template with a workbook](#merging-a-multi-slide-template-with-a-workbook-presentationbuilder).
 
 ## Setup
 
@@ -73,6 +77,48 @@ responsibility.
 | `title`              | `String`      | `null` (no title)        | Rendered as a bold title textbox at the top of the slide. Left unset, no title is added at all. |
 | `linkUrl`            | `String`      | `null` (no link)         | Rendered as a small hyperlinked textbox in the slide's bottom margin -- e.g. a link to wherever the source spreadsheet can be downloaded. Left unset, no link is added at all. |
 | `linkText`           | `String`      | `linkUrl` itself         | The link's visible, clickable label. Only used when `linkUrl` is also set. |
+
+## Merging a multi-slide template with a workbook (`PresentationBuilder`)
+
+`ConvertParams`/`SpreadsheetToPptx` produce one slide from one sheet.
+`PresentationBuilder` works the other way around: hand it a whole multi-slide
+`.pptx` template -- already laid out with placeholder text wherever a table
+or a piece of text should end up -- plus one workbook, and it resolves every
+placeholder across every slide in a single pass:
+
+```java
+byte[] pptxBytes;
+try (var templateInput = new FileInputStream("quarterly-review-template.pptx");
+     var excelInput = new FileInputStream("q3-report.xlsx")) {
+    pptxBytes = PresentationBuilder.of(templateInput, excelInput)
+        .placeholder("REPORT_DATE", "27 Jul 2026")
+        .placeholder("CLIENT_NAME", "Acme Corp")
+        .build();
+}
+Files.write(Path.of("quarterly-review.pptx"), pptxBytes);
+```
+
+Two kinds of placeholder are resolved, wherever they appear in the deck:
+
+- **`%_SHEET(SheetName)`** or **`%_SHEET(SheetName!B2:F10)`** -- a shape
+  whose text *starts with* this is deleted and replaced by a table rendered
+  from that sheet (the whole used range, or just the given range),
+  stretched to exactly fill the shape's own position and size. A shape
+  whose text merely contains `%_SHEET(...)` somewhere other than the start
+  is left untouched.
+- **`$NAME`** -- a token anywhere else in the deck's text is replaced by the
+  value registered with a matching `.placeholder(name, value)` call, the
+  same mechanism `SpreadsheetTemplate` uses for `$TOKEN`s in a spreadsheet
+  (see the [tutorial](#tutorial-spreadsheet-template-to-branded-slideshow)
+  below). Every `$NAME` found in the deck must have a matching
+  `.placeholder` call, and vice versa.
+
+Both are strict by design: a malformed or unresolvable `%_SHEET(...)`
+directive (bad syntax, an unknown sheet name, an invalid range), or a
+`$NAME` mismatch in either direction, throws `IllegalArgumentException`
+rather than silently leaving broken text in the output -- almost always the
+sign of a typo or a stale template. Only top-level shapes on each slide are
+scanned; shapes nested inside a grouped shape are not.
 
 ## Tutorial: spreadsheet template to branded slideshow
 
