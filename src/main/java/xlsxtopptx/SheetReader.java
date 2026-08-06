@@ -1,5 +1,6 @@
 package xlsxtopptx;
 
+import lombok.extern.slf4j.Slf4j;
 import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.CellType;
 import org.apache.poi.ss.usermodel.DataFormatter;
@@ -9,8 +10,10 @@ import org.apache.poi.ss.usermodel.HorizontalAlignment;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.util.CellRangeAddress;
+import org.apache.poi.ss.util.CellReference;
 import org.apache.poi.sl.usermodel.TextParagraph.TextAlign;
 import org.apache.poi.xssf.model.ThemesTable;
+import org.apache.poi.xssf.usermodel.XSSFCell;
 import org.apache.poi.xssf.usermodel.XSSFCellStyle;
 import org.apache.poi.xssf.usermodel.XSSFColor;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
@@ -20,6 +23,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /** Reads one POI {@link Sheet} into a POI-independent {@link SheetSnapshot}. */
+@Slf4j
 public final class SheetReader {
     private SheetReader() {}
 
@@ -87,7 +91,8 @@ public final class SheetReader {
     private static CellSnapshot readCell(Cell cell, FormulaEvaluator evaluator, DataFormatter formatter, ThemesTable themes) {
         if (cell == null) return CellSnapshot.empty();
 
-        var text = formatter.formatCellValue(cell, evaluator);
+        var value = readCellValue(cell, evaluator, formatter);
+        var text = value.text();
 
         var style = cell.getCellStyle();
         if (!(style instanceof XSSFCellStyle xStyle)) {
@@ -125,9 +130,67 @@ public final class SheetReader {
             font.getItalic(),
             font.getFontHeightInPoints(),
             font.getFontName(),
-            mapAlign(xStyle.getAlignment(), isNumericGeneral(cell, evaluator)),
+            mapAlign(xStyle.getAlignment(), value.numericGeneral()),
             borders
         );
+    }
+
+    private record CellValue(String text, boolean numericGeneral) {}
+
+    /** A cell's displayed text, and whether it should right-align as a number under Excel's
+     *  default "General" alignment. Falls back to the formula's last-calculated (cached) result --
+     *  skipping formula parsing/evaluation entirely -- when POI can't resolve a shared formula's
+     *  master cell: a known POI limitation seen on real files after Excel's "Break Links" strips
+     *  the formula text from a shared-formula group's master cell but leaves the other cells in
+     *  that group still pointing at it (POI throws "Master cell of a shared formula with sid=... was
+     *  not found"). Falls back to blank if even the cached result can't be read. */
+    private static CellValue readCellValue(Cell cell, FormulaEvaluator evaluator, DataFormatter formatter) {
+        try {
+            return new CellValue(formatter.formatCellValue(cell, evaluator), isNumericGeneral(cell, evaluator));
+        } catch (RuntimeException e) {
+            if (!isSharedFormulaMasterMissing(e)) throw e;
+
+            var fallback = cachedFormulaResult(cell, formatter);
+            log.warn("{}: shared formula's master cell not found ({}) -- likely broken by breaking "
+                    + "external links in Excel; falling back to {}",
+                cellReference(cell), e.getMessage(), fallback.text().isEmpty() ? "blank" : "its last cached value");
+            return fallback;
+        }
+    }
+
+    private static boolean isSharedFormulaMasterMissing(RuntimeException e) {
+        return e.getMessage() != null && e.getMessage().startsWith("Master cell of a shared formula");
+    }
+
+    private static String cellReference(Cell cell) {
+        return cell.getSheet().getSheetName() + "!"
+            + new CellReference(cell.getRowIndex(), cell.getColumnIndex()).formatAsString();
+    }
+
+    /** Reads a formula cell's last-cached result directly off its cached result type/value,
+     *  bypassing formula parsing entirely -- unlike {@link #isNumericGeneral}, which needs the
+     *  formula evaluator (and so would hit the same missing-master failure this exists to work
+     *  around). */
+    private static CellValue cachedFormulaResult(Cell cell, DataFormatter formatter) {
+        try {
+            // A formula cell with no cached <v> at all reports its numeric value as 0.0 rather
+            // than failing -- indistinguishable from a genuine cached zero unless checked directly.
+            if (cell instanceof XSSFCell xssfCell && !xssfCell.getCTCell().isSetV()) {
+                return new CellValue("", false);
+            }
+
+            var style = cell.getCellStyle();
+            return switch (cell.getCachedFormulaResultType()) {
+                case NUMERIC -> new CellValue(
+                    formatter.formatRawCellContents(cell.getNumericCellValue(), style.getDataFormat(), style.getDataFormatString()),
+                    true);
+                case STRING -> new CellValue(cell.getStringCellValue(), false);
+                case BOOLEAN -> new CellValue(cell.getBooleanCellValue() ? "TRUE" : "FALSE", false);
+                default -> new CellValue("", false);
+            };
+        } catch (RuntimeException e) {
+            return new CellValue("", false);
+        }
     }
 
     /** Excel's default "General" horizontal alignment right-aligns numbers/dates and left-aligns

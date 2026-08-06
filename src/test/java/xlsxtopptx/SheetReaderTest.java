@@ -6,12 +6,14 @@ import org.apache.poi.ss.usermodel.FillPatternType;
 import org.apache.poi.ss.usermodel.HorizontalAlignment;
 import org.apache.poi.ss.util.CellRangeAddress;
 import org.apache.poi.xssf.model.ThemesTable;
+import org.apache.poi.xssf.usermodel.XSSFCell;
 import org.apache.poi.xssf.usermodel.XSSFCellStyle;
 import org.apache.poi.xssf.usermodel.XSSFColor;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.junit.jupiter.api.Test;
 import org.openxmlformats.schemas.drawingml.x2006.main.CTColor;
 import org.openxmlformats.schemas.drawingml.x2006.main.ThemeDocument;
+import org.openxmlformats.schemas.spreadsheetml.x2006.main.STCellFormulaType;
 
 import java.awt.Color;
 
@@ -295,6 +297,94 @@ class SheetReaderTest {
             assertTrue(snapshot.rows().get(0).cellAt(0).isEmpty());
             assertTrue(snapshot.rows().get(0).cellAt(1).isEmpty());
             assertEquals("only this one", snapshot.rows().get(0).cellAt(2).text());
+        }
+    }
+
+    // Reproduces what Excel's "Break Links" does to a shared formula group when its master cell
+    // referenced another workbook: the master is converted to a plain value (its <f> element
+    // disappears entirely), but the other cells in the group are untouched and still carry
+    // <f t="shared" si="N"/> pointing at a master that's no longer declared anywhere -- which is
+    // exactly what makes POI throw "Master cell of a shared formula with sid=N was not found".
+    @Test
+    void aSharedFormulaGroupWithAMissingMasterFallsBackToEachCellsCachedValue() throws Exception {
+        try (var workbook = new XSSFWorkbook()) {
+            var sheet = workbook.createSheet("Data");
+
+            var row0 = sheet.createRow(0);
+            row0.createCell(0).setCellValue(1);
+            var b1 = (XSSFCell) row0.createCell(1);
+            b1.setCellFormula("A1*10");
+
+            var row1 = sheet.createRow(1);
+            row1.createCell(0).setCellValue(2);
+            var b2 = (XSSFCell) row1.createCell(1);
+            b2.setCellFormula("A2*10");
+
+            var row2 = sheet.createRow(2);
+            row2.createCell(0).setCellValue(3);
+            var b3 = (XSSFCell) row2.createCell(1);
+            b3.setCellFormula("A3*10");
+
+            // A genuine shared-formula group: B1 is the master (carries ref + formula text), B2
+            // and B3 are members that only reference it by si.
+            markAsSharedFormulaMaster(b1, "B1:B3", 0);
+            markAsOrphanedSharedFormulaMember(b2, 0, "20");
+            markAsOrphanedSharedFormulaMember(b3, 0, "30");
+
+            // Simulate "Break Links": the master's formula is stripped to a static value, leaving
+            // B2/B3 pointing at a shared-formula group with no master.
+            b1.getCTCell().unsetF();
+            b1.setCellValue(10.0);
+
+            var snapshot = SheetReader.read(sheet, 0);
+
+            assertEquals("10", snapshot.rows().get(0).cellAt(1).text());
+            assertEquals("20", snapshot.rows().get(1).cellAt(1).text(), "should fall back to B2's cached value");
+            assertEquals("30", snapshot.rows().get(2).cellAt(1).text(), "should fall back to B3's cached value");
+        }
+    }
+
+    @Test
+    void aSharedFormulaGroupMemberWithNoCachedValueFallsBackToBlank() throws Exception {
+        try (var workbook = new XSSFWorkbook()) {
+            var sheet = workbook.createSheet("Data");
+
+            var row0 = sheet.createRow(0);
+            row0.createCell(0).setCellValue(1);
+            var b1 = (XSSFCell) row0.createCell(1);
+            b1.setCellFormula("A1*10");
+
+            var row1 = sheet.createRow(1);
+            row1.createCell(0).setCellValue(2);
+            var b2 = (XSSFCell) row1.createCell(1);
+            b2.setCellFormula("A2*10");
+
+            markAsSharedFormulaMaster(b1, "B1:B2", 0);
+            markAsOrphanedSharedFormulaMember(b2, 0, null); // no cached <v> at all
+
+            b1.getCTCell().unsetF();
+            b1.setCellValue(10.0);
+
+            var snapshot = SheetReader.read(sheet, 0);
+
+            assertEquals("", snapshot.rows().get(1).cellAt(1).text());
+        }
+    }
+
+    private static void markAsSharedFormulaMaster(XSSFCell cell, String ref, int si) {
+        var f = cell.getCTCell().getF();
+        f.setT(STCellFormulaType.SHARED);
+        f.setRef(ref);
+        f.setSi(si);
+    }
+
+    private static void markAsOrphanedSharedFormulaMember(XSSFCell cell, int si, String cachedValue) {
+        var f = cell.getCTCell().getF();
+        f.setT(STCellFormulaType.SHARED);
+        f.setSi(si);
+        f.setStringValue(""); // no formula text of its own -- relies entirely on the (soon-missing) master
+        if (cachedValue != null) {
+            cell.getCTCell().setV(cachedValue);
         }
     }
 }
