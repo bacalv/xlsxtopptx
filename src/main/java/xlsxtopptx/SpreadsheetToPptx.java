@@ -50,20 +50,6 @@ public final class SpreadsheetToPptx {
 
             var sheet = workbook.getSheetAt(params.getSheetIndex());
             var bounds = resolveBounds(sheet, params.getTargetRange());
-            var sheetSnapshot = SheetReader.read(sheet,
-                bounds.getFirstRow(), bounds.getLastRow(), bounds.getFirstColumn(), bounds.getLastColumn());
-
-            if (sheetSnapshot.rows().isEmpty()) {
-                var out = new ByteArrayOutputStream();
-                ppt.write(out);
-                return out.toByteArray();
-            }
-
-            var mergeIndex = MergeIndex.build(sheetSnapshot.merges());
-
-            var area = resolveTableArea(ppt, params.getTableArea());
-            var layout = LayoutEngine.compute(sheetSnapshot, mergeIndex, area.getWidth(), area.getHeight(),
-                params.isScaleToFitWidth(), params.isScaleToFitHeight());
 
             var slide = resolveSlide(ppt, params.getTemplateInput());
             if (params.getTitle() != null && !params.getTitle().isBlank()) {
@@ -73,36 +59,52 @@ public final class SpreadsheetToPptx {
                 SlideRenderer.addSourceLink(ppt, slide, params.getLinkUrl(), params.getLinkText());
             }
 
-            var table = slide.createTable(sheetSnapshot.rowCount(), sheetSnapshot.numCols());
-            // A sheet narrower than its target area (i.e. scaleToFitWidth is off and the content
-            // is naturally narrow) is centered horizontally within that area instead of hugging
-            // its left edge.
-            var tableX = area.getX() + Math.max(0, (area.getWidth() - layout.tableWidth()) / 2);
-            table.setAnchor(new Rectangle2D.Double(tableX, area.getY(), layout.tableWidth(), layout.tableHeight()));
-
-            SlideRenderer.renderTable(table, sheetSnapshot, mergeIndex, layout.fontScale());
-
-            for (int c = 0; c < sheetSnapshot.numCols(); c++) {
-                table.setColumnWidth(c, layout.colWidths().get(c));
-            }
-            for (int r = 0; r < sheetSnapshot.rowCount(); r++) {
-                table.getRows().get(r).setHeight(Math.max(layout.rowHeights().get(r), LayoutConstants.MIN_ROW_HEIGHT_PT));
-            }
-
-            for (var merge : sheetSnapshot.merges()) {
-                if (merge.spansMultipleCells()) {
-                    table.mergeCells(merge.firstRow(), merge.lastRow(), merge.firstCol(), merge.lastCol());
-                }
-            }
+            var area = resolveTableArea(ppt, params.getTableArea());
+            layoutTable(slide, sheet, bounds, area, params.isScaleToFitWidth(), params.isScaleToFitHeight());
 
             var out = new ByteArrayOutputStream();
             ppt.write(out);
-
-            log.info("sheet={} rows={} cols={} merges={} fontScale={}",
-                sheet.getSheetName(), sheetSnapshot.rowCount(), sheetSnapshot.numCols(),
-                sheetSnapshot.merges().size(), layout.fontScale());
             return out.toByteArray();
         }
+    }
+
+    /** Renders {@code bounds} of {@code sheet} as a table on {@code slide}, positioned and sized
+     *  to exactly fill {@code area} (points, top-left origin) -- or does nothing if that range is
+     *  empty. A sheet narrower than {@code area} with {@code scaleToFitWidth} off (i.e. the content
+     *  is naturally narrow) is centered horizontally within {@code area} instead of hugging its
+     *  left edge. */
+    static void layoutTable(XSLFSlide slide, Sheet sheet, CellRangeAddress bounds, Rectangle2D area,
+                             boolean scaleToFitWidth, boolean scaleToFitHeight) {
+        var sheetSnapshot = SheetReader.read(sheet,
+            bounds.getFirstRow(), bounds.getLastRow(), bounds.getFirstColumn(), bounds.getLastColumn());
+        if (sheetSnapshot.rows().isEmpty()) return;
+
+        var mergeIndex = MergeIndex.build(sheetSnapshot.merges());
+        var layout = LayoutEngine.compute(sheetSnapshot, mergeIndex, area.getWidth(), area.getHeight(),
+            scaleToFitWidth, scaleToFitHeight);
+
+        var table = slide.createTable(sheetSnapshot.rowCount(), sheetSnapshot.numCols());
+        var tableX = area.getX() + Math.max(0, (area.getWidth() - layout.tableWidth()) / 2);
+        table.setAnchor(new Rectangle2D.Double(tableX, area.getY(), layout.tableWidth(), layout.tableHeight()));
+
+        SlideRenderer.renderTable(table, sheetSnapshot, mergeIndex, layout.fontScale());
+
+        for (int c = 0; c < sheetSnapshot.numCols(); c++) {
+            table.setColumnWidth(c, layout.colWidths().get(c));
+        }
+        for (int r = 0; r < sheetSnapshot.rowCount(); r++) {
+            table.getRows().get(r).setHeight(Math.max(layout.rowHeights().get(r), LayoutConstants.MIN_ROW_HEIGHT_PT));
+        }
+
+        for (var merge : sheetSnapshot.merges()) {
+            if (merge.spansMultipleCells()) {
+                table.mergeCells(merge.firstRow(), merge.lastRow(), merge.firstCol(), merge.lastCol());
+            }
+        }
+
+        log.info("sheet={} rows={} cols={} merges={} fontScale={}",
+            sheet.getSheetName(), sheetSnapshot.rowCount(), sheetSnapshot.numCols(),
+            sheetSnapshot.merges().size(), layout.fontScale());
     }
 
     /** Resolves the inclusive, zero-based row/column bounds to convert: the parsed
@@ -112,11 +114,7 @@ public final class SpreadsheetToPptx {
         if (targetRange != null && !targetRange.isBlank()) {
             return CellRangeAddress.valueOf(targetRange);
         }
-
-        var firstRow = Math.max(0, sheet.getFirstRowNum());
-        var lastRow = sheet.getLastRowNum();
-        var lastCol = SheetReader.usedLastColumn(sheet, firstRow, lastRow);
-        return new CellRangeAddress(firstRow, lastRow, 0, lastCol);
+        return SheetReader.usedBounds(sheet);
     }
 
     /** A blank presentation, or one based on {@code templateInput} if given. */

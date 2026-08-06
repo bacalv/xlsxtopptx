@@ -8,6 +8,7 @@ import org.apache.poi.ss.usermodel.FormulaEvaluator;
 import org.apache.poi.ss.usermodel.HorizontalAlignment;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
+import org.apache.poi.ss.util.CellRangeAddress;
 import org.apache.poi.sl.usermodel.TextParagraph.TextAlign;
 import org.apache.poi.xssf.model.ThemesTable;
 import org.apache.poi.xssf.usermodel.XSSFCellStyle;
@@ -26,6 +27,15 @@ public final class SheetReader {
         var lastRow = sheet.getLastRowNum();
         var lastCol = usedLastColumn(sheet, sheetFirstRow, lastRow);
         return read(sheet, sheetFirstRow, lastRow, 0, lastCol);
+    }
+
+    /** The sheet's full used area: every row from its first to its last, and every column up to
+     *  the rightmost used one. */
+    public static CellRangeAddress usedBounds(Sheet sheet) {
+        var firstRow = Math.max(0, sheet.getFirstRowNum());
+        var lastRow = sheet.getLastRowNum();
+        var lastCol = usedLastColumn(sheet, firstRow, lastRow);
+        return new CellRangeAddress(firstRow, lastRow, 0, lastCol);
     }
 
     /** The rightmost used column (inclusive, zero-based) across {@code [firstRow, lastRow]},
