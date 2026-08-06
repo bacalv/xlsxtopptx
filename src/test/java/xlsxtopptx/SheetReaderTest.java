@@ -371,6 +371,47 @@ class SheetReaderTest {
         }
     }
 
+    // Reproduces a real-world report: an ordinary, perfectly intact formula cell (L7) that merely
+    // *references* another cell (D7) whose shared formula group is broken. Evaluating L7 fails
+    // deep inside WorkbookEvaluator while resolving that reference, and POI wraps it in an outer
+    // "Failed to evaluate cell: ..." IllegalStateException -- the real "Master cell of a shared
+    // formula..." failure only shows up via getCause(). L7 itself is untouched by the corruption,
+    // so it should recover using its own last-cached value.
+    @Test
+    void aFormulaThatMerelyReferencesAnotherCellsBrokenSharedFormulaFallsBackToItsOwnCachedValue() throws Exception {
+        try (var workbook = new XSSFWorkbook()) {
+            var sheet = workbook.createSheet("PS");
+
+            var row6 = sheet.createRow(5); // Excel row 6
+            row6.createCell(0).setCellValue(1); // A6
+            var d6 = (XSSFCell) row6.createCell(3); // D6: shared-formula master
+            d6.setCellFormula("A6*10");
+
+            var row7 = sheet.createRow(6); // Excel row 7
+            row7.createCell(0).setCellValue(2); // A7
+            var d7 = (XSSFCell) row7.createCell(3); // D7: shared-formula member, si=0
+            d7.setCellFormula("A7*10");
+            row7.createCell(7).setCellValue(5); // H7
+            var l7 = (XSSFCell) row7.createCell(11); // L7: ordinary formula referencing H7 and D7
+
+            markAsSharedFormulaMaster(d6, "D6:D7", 0);
+            markAsOrphanedSharedFormulaMember(d7, 0, "20");
+            l7.setCellFormula("H7-D7");
+
+            // Break the master, same as Excel's "Break Links" would.
+            d6.getCTCell().unsetF();
+            d6.setCellValue(10.0);
+
+            // L7's own last-calculated value, as Excel would have cached it before the file broke.
+            l7.getCTCell().setV("-45");
+
+            var snapshot = SheetReader.read(sheet, 0);
+
+            assertEquals("-45", snapshot.rows().get(6).cellAt(11).text(),
+                "L7 should fall back to its own cached value when evaluating it transitively hits D7's broken group");
+        }
+    }
+
     private static void markAsSharedFormulaMaster(XSSFCell cell, String ref, int si) {
         var f = cell.getCTCell().getF();
         f.setT(STCellFormulaType.SHARED);

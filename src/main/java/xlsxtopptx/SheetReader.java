@@ -148,18 +148,30 @@ public final class SheetReader {
         try {
             return new CellValue(formatter.formatCellValue(cell, evaluator), isNumericGeneral(cell, evaluator));
         } catch (RuntimeException e) {
-            if (!isSharedFormulaMasterMissing(e)) throw e;
+            var cause = sharedFormulaMasterMissingCause(e);
+            if (cause == null) throw e;
 
             var fallback = cachedFormulaResult(cell, formatter);
-            log.warn("{}: shared formula's master cell not found ({}) -- likely broken by breaking "
-                    + "external links in Excel; falling back to {}",
-                cellReference(cell), e.getMessage(), fallback.text().isEmpty() ? "blank" : "its last cached value");
+            log.warn("{}: formula evaluation failed ({}) -- likely a shared formula elsewhere in the workbook "
+                    + "broken by breaking external links in Excel; falling back to {}",
+                cellReference(cell), cause.getMessage(), fallback.text().isEmpty() ? "blank" : "its last cached value");
             return fallback;
         }
     }
 
-    private static boolean isSharedFormulaMasterMissing(RuntimeException e) {
-        return e.getMessage() != null && e.getMessage().startsWith("Master cell of a shared formula");
+    /** Walks {@code e}'s cause chain for POI's "shared formula master not found" failure and
+     *  returns the throwable that actually reports it, or {@code null} if it's not in there
+     *  anywhere. This surfaces wrapped in an outer "Failed to evaluate cell: ..." exception
+     *  whenever the cell being read merely *references* some other cell -- on any sheet -- whose
+     *  own shared formula group is the one that's actually broken, so checking only {@code
+     *  e.getMessage()} misses it. */
+    private static Throwable sharedFormulaMasterMissingCause(Throwable e) {
+        for (var t = e; t != null; t = t.getCause()) {
+            if (t.getMessage() != null && t.getMessage().startsWith("Master cell of a shared formula")) {
+                return t;
+            }
+        }
+        return null;
     }
 
     private static String cellReference(Cell cell) {
