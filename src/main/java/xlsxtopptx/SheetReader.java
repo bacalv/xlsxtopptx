@@ -1,12 +1,15 @@
 package xlsxtopptx;
 
 import lombok.extern.slf4j.Slf4j;
+import org.apache.poi.ss.formula.ConditionalFormattingEvaluator;
+import org.apache.poi.ss.formula.WorkbookEvaluatorProvider;
 import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.CellType;
 import org.apache.poi.ss.usermodel.DataFormatter;
 import org.apache.poi.ss.usermodel.FillPatternType;
 import org.apache.poi.ss.usermodel.FormulaEvaluator;
 import org.apache.poi.ss.usermodel.HorizontalAlignment;
+import org.apache.poi.ss.usermodel.PatternFormatting;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.util.CellRangeAddress;
@@ -74,6 +77,7 @@ public final class SheetReader {
         var evaluator = sheet.getWorkbook().getCreationHelper().createFormulaEvaluator();
         var formatter = new DataFormatter();
         var themes = sheet.getWorkbook() instanceof XSSFWorkbook xwb ? xwb.getTheme() : null;
+        var cfEvaluator = new ConditionalFormattingEvaluator(sheet.getWorkbook(), (WorkbookEvaluatorProvider) evaluator);
 
         var result = new ArrayList<RowSnapshot>();
         for (int r = firstRow; r <= lastRow; r++) {
@@ -81,14 +85,17 @@ public final class SheetReader {
             var cells = new ArrayList<CellSnapshot>();
             for (int c = firstCol; c <= lastCol; c++) {
                 var cell = row != null ? row.getCell(c) : null;
-                cells.add(readCell(cell, evaluator, formatter, themes));
+                cells.add(readCell(cell, evaluator, formatter, themes, cfEvaluator));
             }
             result.add(new RowSnapshot(cells));
         }
         return result;
     }
 
-    private static CellSnapshot readCell(Cell cell, FormulaEvaluator evaluator, DataFormatter formatter, ThemesTable themes) {
+    private static CellSnapshot readCell(
+        Cell cell, FormulaEvaluator evaluator, DataFormatter formatter, ThemesTable themes,
+        ConditionalFormattingEvaluator cfEvaluator
+    ) {
         if (cell == null) return CellSnapshot.empty();
 
         var value = readCellValue(cell, evaluator, formatter);
@@ -111,6 +118,8 @@ public final class SheetReader {
         var fill = xStyle.getFillPattern() == FillPatternType.SOLID_FOREGROUND
             ? toAwtColor(xStyle.getFillForegroundColorColor(), themes)
             : null;
+        var cfFill = conditionalFill(cell, cfEvaluator, themes);
+        if (cfFill != null) fill = cfFill;
 
         var borders = new CellBorders(
             new BorderEdgeStyle(xStyle.getBorderTop(), toAwtColor(xStyle.getTopBorderXSSFColor(), themes)),
@@ -278,6 +287,31 @@ public final class SheetReader {
             runs.add(new MergeRegion(localRow, localRow, runStart - firstCol, c - 1 - firstCol));
         }
         return -1;
+    }
+
+    // ---------- conditional formatting ----------
+
+    /** The fill color of the highest-priority conditional-formatting rule whose condition is
+     *  currently true for {@code cell} (Excel evaluates rules in priority order and the
+     *  highest-priority one with a fill wins), or {@code null} if no applicable rule defines one. */
+    private static Color conditionalFill(Cell cell, ConditionalFormattingEvaluator cfEvaluator, ThemesTable themes) {
+        for (var match : cfEvaluator.getConditionalFormattingForCell(cell)) {
+            var color = cfFillColor(match.getRule().getPatternFormatting(), themes);
+            if (color != null) return color;
+        }
+        return null;
+    }
+
+    /** Conditional-formatting fills are stored as differential ("dxf") formatting records, where --
+     *  unlike a normal cell style's {@code <fill>} -- a solid fill's color is written to {@code
+     *  bgColor} rather than {@code fgColor}. This is a documented OOXML quirk specific to dxf
+     *  records, and matches how POI's own API writes conditional-formatting fills
+     *  ({@code PatternFormatting#setFillBackgroundColor}). */
+    private static Color cfFillColor(PatternFormatting pattern, ThemesTable themes) {
+        if (pattern == null || pattern.getFillPattern() == PatternFormatting.NO_FILL) return null;
+        var color = pattern.getFillBackgroundColorColor();
+        if (color == null) color = pattern.getFillForegroundColorColor();
+        return color instanceof XSSFColor xColor ? toAwtColor(xColor, themes) : null;
     }
 
     // ---------- small conversions ----------

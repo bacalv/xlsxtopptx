@@ -2,8 +2,10 @@ package xlsxtopptx;
 
 import org.apache.poi.sl.usermodel.TextParagraph.TextAlign;
 import org.apache.poi.ss.usermodel.BorderStyle;
+import org.apache.poi.ss.usermodel.ComparisonOperator;
 import org.apache.poi.ss.usermodel.FillPatternType;
 import org.apache.poi.ss.usermodel.HorizontalAlignment;
+import org.apache.poi.ss.usermodel.PatternFormatting;
 import org.apache.poi.ss.util.CellRangeAddress;
 import org.apache.poi.xssf.model.ThemesTable;
 import org.apache.poi.xssf.usermodel.XSSFCell;
@@ -141,6 +143,106 @@ class SheetReaderTest {
 
     private static void setSrgb(CTColor color, int r, int g, int b) {
         color.addNewSrgbClr().setVal(new byte[]{(byte) r, (byte) g, (byte) b});
+    }
+
+    @Test
+    void appliesConditionalFormattingFillWhenTheRuleConditionIsTrue() throws Exception {
+        try (var workbook = new XSSFWorkbook()) {
+            var sheet = workbook.createSheet();
+            var row = sheet.createRow(0);
+            row.createCell(0).setCellValue(-5);
+
+            addFillRule(sheet, "A1:A1", ComparisonOperator.LT, "0", 0xFF, 0x00, 0x00);
+
+            var cs = SheetReader.read(sheet, 0).rows().get(0).cellAt(0);
+
+            assertEquals(new Color(0xFF, 0x00, 0x00), cs.fill());
+        }
+    }
+
+    @Test
+    void conditionalFormattingLeavesFillUnchangedWhenTheRuleConditionIsFalse() throws Exception {
+        try (var workbook = new XSSFWorkbook()) {
+            var sheet = workbook.createSheet();
+            var row = sheet.createRow(0);
+            row.createCell(0).setCellValue(5);
+
+            addFillRule(sheet, "A1:A1", ComparisonOperator.LT, "0", 0xFF, 0x00, 0x00);
+
+            var cs = SheetReader.read(sheet, 0).rows().get(0).cellAt(0);
+
+            assertEquals(null, cs.fill());
+        }
+    }
+
+    @Test
+    void conditionalFormattingFillOverridesTheCellsOwnStaticFill() throws Exception {
+        try (var workbook = new XSSFWorkbook()) {
+            var sheet = workbook.createSheet();
+            var row = sheet.createRow(0);
+            var cell = row.createCell(0);
+            cell.setCellValue(-5);
+
+            var style = (XSSFCellStyle) workbook.createCellStyle();
+            style.setFillForegroundColor(new XSSFColor(new byte[]{(byte) 0x00, (byte) 0x00, (byte) 0xFF}));
+            style.setFillPattern(FillPatternType.SOLID_FOREGROUND);
+            cell.setCellStyle(style);
+
+            addFillRule(sheet, "A1:A1", ComparisonOperator.LT, "0", 0xFF, 0x00, 0x00);
+
+            var cs = SheetReader.read(sheet, 0).rows().get(0).cellAt(0);
+
+            assertEquals(new Color(0xFF, 0x00, 0x00), cs.fill());
+        }
+    }
+
+    @Test
+    void higherPriorityConditionalFormattingRuleWinsWhenMultipleRulesMatch() throws Exception {
+        try (var workbook = new XSSFWorkbook()) {
+            var sheet = workbook.createSheet();
+            var row = sheet.createRow(0);
+            row.createCell(0).setCellValue(-5);
+
+            // Both rules match (-5 < 0 and -5 <= 10); the first-added one has the higher priority
+            // (lower priority number) in XSSF, so its fill should win.
+            addFillRule(sheet, "A1:A1", ComparisonOperator.LT, "0", 0xFF, 0x00, 0x00);
+            addFillRule(sheet, "A1:A1", ComparisonOperator.LE, "10", 0x00, 0xFF, 0x00);
+
+            var cs = SheetReader.read(sheet, 0).rows().get(0).cellAt(0);
+
+            assertEquals(new Color(0xFF, 0x00, 0x00), cs.fill());
+        }
+    }
+
+    @Test
+    void redIfNegativeGreenOtherwiseWorksAcrossMultipleRows() throws Exception {
+        try (var workbook = new XSSFWorkbook()) {
+            var sheet = workbook.createSheet();
+            sheet.createRow(0).createCell(0).setCellValue(-10);
+            sheet.createRow(1).createCell(0).setCellValue(0);
+            sheet.createRow(2).createCell(0).setCellValue(10);
+
+            addFillRule(sheet, "A1:A3", ComparisonOperator.LT, "0", 0xFF, 0x00, 0x00);
+            addFillRule(sheet, "A1:A3", ComparisonOperator.GE, "0", 0x00, 0xFF, 0x00);
+
+            var snapshot = SheetReader.read(sheet, 0);
+
+            assertEquals(new Color(0xFF, 0x00, 0x00), snapshot.rows().get(0).cellAt(0).fill());
+            assertEquals(new Color(0x00, 0xFF, 0x00), snapshot.rows().get(1).cellAt(0).fill());
+            assertEquals(new Color(0x00, 0xFF, 0x00), snapshot.rows().get(2).cellAt(0).fill());
+        }
+    }
+
+    private static void addFillRule(
+        org.apache.poi.ss.usermodel.Sheet sheet, String range, byte comparisonOperator, String formula1,
+        int r, int g, int b
+    ) {
+        var sheetCf = sheet.getSheetConditionalFormatting();
+        var rule = sheetCf.createConditionalFormattingRule(comparisonOperator, formula1);
+        var fill = rule.createPatternFormatting();
+        fill.setFillBackgroundColor(new XSSFColor(new byte[]{(byte) r, (byte) g, (byte) b}));
+        fill.setFillPattern(PatternFormatting.SOLID_FOREGROUND);
+        sheetCf.addConditionalFormatting(new CellRangeAddress[]{CellRangeAddress.valueOf(range)}, rule);
     }
 
     @Test
